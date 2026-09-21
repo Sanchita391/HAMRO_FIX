@@ -21,6 +21,7 @@ import 'package:hamro_fix/screens/auth/admin/admin_signup.dart';
 import 'package:hamro_fix/screens/auth/official/official_login.dart';
 import 'package:hamro_fix/screens/auth/public/public_login.dart';
 import 'package:hamro_fix/screens/auth/public/public_signup.dart';
+import 'package:hamro_fix/screens/auth/worker/worker_login.dart';
 import 'package:hamro_fix/screens/auth/worker/worker_signup.dart';
 
 /// Dedicated Light Green Civic Theme to eliminate Flutter's default purple
@@ -117,7 +118,7 @@ enum AppRole {
     subtitleNp: 'तोकिएका कार्यहरू समाधान गरी प्रगति पेश गर्नुहोस्',
     icon: Icons.engineering_rounded,
     allowRegister: true,
-    allowLogin: false,
+    allowLogin: true,
     restrictionNote:
         'Account requires administrative clearance before initial login',
     restrictionNoteNp: 'पहिलो लगइन अघि प्रशासनिक स्वीकृतिको आवश्यकता पर्दछ',
@@ -194,7 +195,8 @@ class _LandingPageState extends State<LandingPage> {
     final Widget targetPage = switch (role) {
       AppRole.public =>
         isRegister ? const PublicSignupPage() : const PublicLoginPage(),
-      AppRole.worker => const WorkerSignupPage(),
+      AppRole.worker =>
+        isRegister ? const WorkerSignupPage() : const WorkerLoginPage(),
       AppRole.official => const OfficialLoginPage(),
       AppRole.admin => const AdminSignupPage(),
     };

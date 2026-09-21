@@ -8,6 +8,9 @@ import 'package:flutter/services.dart';
 
 import 'package:hamro_fix/screens/auth/landing_page.dart';
 import 'package:hamro_fix/screens/auth/official/official_signup.dart';
+import 'package:hamro_fix/models/public_model.dart';
+import 'package:hamro_fix/services/auth_messages.dart';
+import 'package:hamro_fix/services/auth_services.dart';
 
 class OfficialLoginPage extends StatefulWidget {
   const OfficialLoginPage({super.key});
@@ -95,15 +98,21 @@ class _OfficialLoginPageState extends State<OfficialLoginPage> {
     }
 
     setState(() => _isLoading = true);
-    await Future<void>.delayed(const Duration(milliseconds: 750));
+    try {
+      await AuthServices().loginWithEmail(
+        email: _emailController.text,
+        password: _passwordController.text,
+        expectedRole: UserRole.official,
+        employeeId: _employeeIdController.text,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      _showSnack(AuthMessages.from(e), isError: true);
+      return;
+    }
     if (!mounted) return;
-
     setState(() => _isLoading = false);
-    _showSnack(
-      _isEnglish
-          ? 'Signed in successfully. Welcome, Ward Official.'
-          : 'लगइन सफल भयो। वडा अधिकारी, स्वागत छ।',
-    );
   }
 
   void _showSnack(String msg, {bool isError = false}) {

@@ -3,6 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 
+import 'package:hamro_fix/services/auth_messages.dart';
+import 'package:hamro_fix/services/auth_services.dart';
+
 // ── Worker Signup Page ───────────────────────────────────────────────────────
 class WorkerSignupPage extends StatefulWidget {
   const WorkerSignupPage({super.key});
@@ -29,6 +32,7 @@ class _WorkerSignupPageState extends State<WorkerSignupPage>
   bool _isEnglish = true;
   bool _obscurePassword = true;
   bool _attempted = false;
+  bool _isSubmitting = false;
   DateTime? _selectedDate;
   String? _selectedGender;
   String? _selectedDistrict;
@@ -382,7 +386,7 @@ class _WorkerSignupPageState extends State<WorkerSignupPage>
     return true;
   }
 
-  void _handleNext() {
+  Future<void> _handleNext() async {
     setState(() => _attempted = true);
     if (_currentStep == 0 && _validateStep0()) {
       setState(() {
@@ -397,11 +401,29 @@ class _WorkerSignupPageState extends State<WorkerSignupPage>
       });
       _animateStep();
     } else if (_currentStep == 2 && _validateStep2()) {
-      // Navigate to pending verification screen
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const PendingVerificationPage()),
-      );
+      if (_isSubmitting) return;
+      setState(() => _isSubmitting = true);
+      try {
+        await AuthServices().registerWorker(
+          fullName: _fullNameController.text,
+          email: _emailController.text,
+          phone: _phoneController.text,
+          password: _passwordController.text,
+          extra: {
+            'citizenshipNumber': _citizenshipController.text.trim(),
+            'experienceYears': _experienceController.text.trim(),
+            'gender': _selectedGender,
+            'district': _selectedDistrict,
+            'municipality': _selectedMunicipality,
+            'specialization': _selectedSpecialization,
+            'dateOfBirth': _selectedDate?.toIso8601String(),
+          },
+        );
+      } catch (e) {
+        if (!mounted) return;
+        setState(() => _isSubmitting = false);
+        _showSnack(AuthMessages.from(e));
+      }
     }
   }
 
@@ -1600,8 +1622,7 @@ class _PendingVerificationPageState extends State<PendingVerificationPage>
 
                 // Back to Home
                 GestureDetector(
-                  onTap: () =>
-                      Navigator.of(context).popUntil((route) => route.isFirst),
+                  onTap: () => AuthServices().signOut(),
                   child: Container(
                     height: 52,
                     decoration: BoxDecoration(
@@ -1621,7 +1642,7 @@ class _PendingVerificationPageState extends State<PendingVerificationPage>
                     ),
                     alignment: Alignment.center,
                     child: const Text(
-                      'Back to Home',
+                      'Back to Sign In',
                       style: TextStyle(
                         color: Colors.white,
                         fontSize: 16,

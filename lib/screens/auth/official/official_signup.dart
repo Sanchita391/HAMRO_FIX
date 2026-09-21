@@ -7,6 +7,8 @@ import 'package:flutter/services.dart';
 
 import 'package:hamro_fix/screens/auth/landing_page.dart';
 import 'package:hamro_fix/screens/auth/official/official_login.dart';
+import 'package:hamro_fix/services/auth_messages.dart';
+import 'package:hamro_fix/services/auth_services.dart';
 
 class OfficialSignupPage extends StatefulWidget {
   const OfficialSignupPage({super.key});
@@ -106,7 +108,19 @@ class _OfficialSignupPageState extends State<OfficialSignupPage> {
     }
 
     setState(() => _isLoading = true);
-    await Future<void>.delayed(const Duration(milliseconds: 750));
+    try {
+      await AuthServices().requestOfficialAccess(
+        fullName: _fullNameController.text,
+        email: _emailController.text,
+        employeeId: _employeeIdController.text,
+        password: _passwordController.text,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      _showSnack(AuthMessages.from(e), isError: true);
+      return;
+    }
     if (!mounted) return;
 
     setState(() => _isLoading = false);

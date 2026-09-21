@@ -7,6 +7,8 @@ import 'package:flutter/services.dart';
 
 import 'package:hamro_fix/screens/auth/landing_page.dart';
 import 'package:hamro_fix/screens/auth/public/public_login.dart';
+import 'package:hamro_fix/services/auth_messages.dart';
+import 'package:hamro_fix/services/auth_services.dart';
 
 class PublicSignupPage extends StatefulWidget {
   const PublicSignupPage({super.key});
@@ -17,6 +19,7 @@ class PublicSignupPage extends StatefulWidget {
 
 class _PublicSignupPageState extends State<PublicSignupPage> {
   final _formKey = GlobalKey<FormState>();
+  final AuthServices _authServices = AuthServices();
 
   final _fullNameController = TextEditingController();
   final _emailController = TextEditingController();
@@ -130,22 +133,28 @@ class _PublicSignupPageState extends State<PublicSignupPage> {
     }
 
     setState(() => _isLoading = true);
-    await Future<void>.delayed(const Duration(milliseconds: 750));
-    if (!mounted) return;
 
-    setState(() => _isLoading = false);
-    _showSnack(
-      _isEnglish
-          ? 'Registration successful! You can now sign in.'
-          : 'दर्ता सफल भयो! अब लगइन गर्न सक्नुहुन्छ।',
-    );
+    try {
+      await _authServices.registerCitizen(
+        fullName: _fullNameController.text,
+        email: _emailController.text,
+        phone: _phoneController.text,
+        password: _passwordController.text,
+      );
 
-    await Future<void>.delayed(const Duration(milliseconds: 500));
-    if (!mounted) return;
+      if (!mounted) return;
+      setState(() => _isLoading = false);
 
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute<void>(builder: (_) => const PublicLoginPage()),
-    );
+      _showSnack(
+        _isEnglish
+            ? 'Registration successful!'
+            : 'दर्ता सफल भयो!',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      _showSnack(AuthMessages.from(e), isError: true);
+    }
   }
 
   void _showSnack(String msg, {bool isError = false}) {
@@ -270,7 +279,9 @@ class _PublicSignupPageState extends State<PublicSignupPage> {
                         borderRadius: BorderRadius.circular(10),
                         boxShadow: [
                           BoxShadow(
-                            color: const Color(0xFF2E7D32).withValues(alpha: 0.25),
+                            color: const Color(
+                              0xFF2E7D32,
+                            ).withValues(alpha: 0.25),
                             blurRadius: 6,
                             offset: const Offset(0, 2),
                           ),
@@ -279,7 +290,9 @@ class _PublicSignupPageState extends State<PublicSignupPage> {
                 child: Text(
                   _isEnglish ? 'Sign In' : 'लगइन',
                   style: TextStyle(
-                    color: registerSelected ? Colors.grey.shade700 : Colors.white,
+                    color: registerSelected
+                        ? Colors.grey.shade700
+                        : Colors.white,
                     fontWeight: registerSelected
                         ? FontWeight.w600
                         : FontWeight.bold,
@@ -298,7 +311,9 @@ class _PublicSignupPageState extends State<PublicSignupPage> {
                       borderRadius: BorderRadius.circular(10),
                       boxShadow: [
                         BoxShadow(
-                          color: const Color(0xFF2E7D32).withValues(alpha: 0.25),
+                          color: const Color(
+                            0xFF2E7D32,
+                          ).withValues(alpha: 0.25),
                           blurRadius: 6,
                           offset: const Offset(0, 2),
                         ),

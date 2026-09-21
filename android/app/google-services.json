@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "461081246021",
+    "project_id": "hamrofix-d10d8",
+    "storage_bucket": "hamrofix-d10d8.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:461081246021:android:766f49815d7022d5cf262c",
+        "android_client_info": {
+          "package_name": "app.hamro_fix"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAE5LIHSuG7z5s3XccHRaFw-LbfBF-2pMg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
