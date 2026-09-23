@@ -43,6 +43,14 @@
 	</array>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>HamroFix needs the camera to capture report evidence and profile photos.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>HamroFix needs photo library access to attach images to reports and profiles.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>HamroFix needs the microphone when recording report videos.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>HamroFix uses your location only when you submit a report, inspection, or completed work.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 </dict>

@@ -18,9 +18,9 @@ service cloud.firestore {
     }
 
     function signedInRole() {
-      return isAuthenticated() && exists(userPath())
-        ? userDoc().role
-        : '';
+      return request.auth.token.keys().hasAny(['role'])
+        ? request.auth.token.role
+        : (isAuthenticated() && exists(userPath()) ? userDoc().role : '');
     }
 
     function signedInStatus() {
@@ -34,79 +34,147 @@ service cloud.firestore {
     }
 
     function isApprovedStaff() {
-      return signedInStatus() == 'approved' || signedInStatus() == '';
+      return signedInStatus() in ['approved', 'active', ''];
+    }
+
+    function roleSet() {
+      return isAuthenticated() && exists(userPath())
+        ? (userDoc().keys().hasAny(['roles']) && userDoc().roles.size() > 0
+            ? userDoc().roles
+            : [userDoc().role])
+        : [];
+    }
+
+    function hasAppRole(r) {
+      return r in roleSet();
     }
 
     function isAdmin() {
-      return signedInRole() == 'admin' && isApprovedStaff();
+      return hasAppRole('admin') && isApprovedStaff();
     }
 
     function isOfficial() {
-      return signedInRole() == 'official' && isApprovedStaff();
+      return hasAppRole('official') && isApprovedStaff();
     }
 
     function isWorker() {
-      return signedInRole() == 'worker' && isApprovedStaff();
+      return hasAppRole('worker') && isApprovedStaff();
     }
 
     function isPublic() {
-      return (signedInRole() == 'public' || signedInRole() == 'citizen')
+      return (hasAppRole('public') || hasAppRole('citizen'))
         && isApprovedStaff();
     }
 
+    function bootstrapOpen() {
+      return !exists(/databases/$(database)/documents/appSettings/bootstrap);
+    }
+
     function isValidRole(role) {
-      return role in ['public', 'official', 'worker', 'admin'];
+      return role in ['public', 'citizen', 'official', 'worker', 'admin'];
     }
 
-    function hasRequiredUserFields(data) {
-      return data.keys().hasAll(['uid', 'name', 'email', 'role', 'createdAt'])
-        && data.uid is string
-        && data.name is string
-        && data.email is string
-        && data.role is string
-        && data.createdAt is timestamp
-        && data.name.size() >= 3
-        && data.name.size() <= 80
-        && data.email.size() >= 5
-        && data.email.size() <= 120;
+    function notBlacklisted() {
+      return !(isAuthenticated() && exists(userPath())
+        && userDoc().keys().hasAny(['accountStatus'])
+        && userDoc().accountStatus == 'blacklisted');
     }
 
-    function selfCreateStatus(data) {
-      return data.accountStatus is string ? data.accountStatus
-        : (data.approvalStatus is string ? data.approvalStatus : '');
+    function assignedToMe() {
+      return resource.data.assignedWorkerId == request.auth.uid
+        || resource.data.workerId == request.auth.uid
+        || request.auth.uid in resource.data.assignedWorkerIds;
     }
 
-    function isValidSelfCreate(data) {
-      return isAuthenticated()
-        && data.uid == request.auth.uid
-        && hasRequiredUserFields(data)
-        && (
-          (data.role == 'public' && selfCreateStatus(data) in ['approved', ''])
-          || (data.role == 'worker' && selfCreateStatus(data) == 'pending')
-          || (data.role == 'official' && selfCreateStatus(data) == 'pending')
-        );
+    function isAssignedWorker() {
+      return isWorker() && assignedToMe();
     }
 
     match /users/{userId} {
-      allow read: if isOwner(userId) || isAdmin() || isOfficial();
+      allow read: if isOwner(userId) || isAdmin() || isOfficial()
+        || (isWorker() && resource.data.role in ['worker', 'official']);
 
-      allow create: if (isOwner(userId) && isValidSelfCreate(request.resource.data))
-        || (isAdmin() && hasRequiredUserFields(request.resource.data)
-            && isValidRole(request.resource.data.role)
-            && request.resource.data.role != 'admin');
+      allow create: if isOwner(userId)
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.email is string
+        && request.resource.data.name is string
+        && request.resource.data.name.size() >= 3
+        && isValidRole(request.resource.data.role)
+        && (
+          (request.resource.data.role != 'admin'
+            && (
+              (request.resource.data.role in ['public', 'citizen']
+                && request.resource.data.accountStatus in ['approved', 'pending', 'active'])
+              || (request.resource.data.role in ['worker', 'official']
+                  && request.resource.data.accountStatus == 'pending')
+            ))
+          || (bootstrapOpen()
+              && request.resource.data.role == 'admin'
+              && request.resource.data.accountStatus in ['approved', 'active'])
+        );
 
       allow update: if (isOwner(userId)
           && request.resource.data.uid == resource.data.uid
-          && request.resource.data.role == resource.data.role
           && request.resource.data.email == resource.data.email
-          && !request.resource.data.diff(resource.data).affectedKeys()
-              .hasAny(['role', 'uid', 'email', 'createdAt', 'accountStatus', 'approvalStatus']))
+          && (
+            (!request.resource.data.diff(resource.data).affectedKeys()
+                .hasAny([
+                  'role', 'roles', 'uid', 'email', 'createdAt', 'accountStatus',
+                  'approvalStatus', 'blacklistStatus'
+                ]))
+            || (
+              request.resource.data.diff(resource.data).affectedKeys()
+                .hasOnly(['role', 'roles', 'updatedAt'])
+              && request.resource.data.role in (
+                resource.data.keys().hasAny(['roles']) && resource.data.roles.size() > 0
+                  ? resource.data.roles
+                  : [resource.data.role]
+              )
+            )
+            || (
+              request.resource.data.roles is list
+              && request.resource.data.diff(resource.data).affectedKeys()
+                .hasOnly([
+                  'roles', 'updatedAt', 'name', 'fullName', 'phone',
+                  'profileImageUrl'
+                ])
+              && 'public' in request.resource.data.roles
+              && !('admin' in request.resource.data.roles
+                    && !(resource.data.keys().hasAny(['roles'])
+                      ? 'admin' in resource.data.roles
+                      : resource.data.role == 'admin'))
+              && !('official' in request.resource.data.roles
+                    && !(resource.data.keys().hasAny(['roles'])
+                      ? 'official' in resource.data.roles
+                      : resource.data.role == 'official'))
+              && !('worker' in request.resource.data.roles
+                    && !(resource.data.keys().hasAny(['roles'])
+                      ? 'worker' in resource.data.roles
+                      : resource.data.role == 'worker'))
+            )
+          ))
         || isAdmin()
         || (isOfficial()
-            && resource.data.role == 'worker'
+            && exists(/databases/$(database)/documents/workerApplications/$(userId))
             && request.resource.data.diff(resource.data).affectedKeys()
-                .hasOnly(['accountStatus', 'approvalStatus', 'reviewedBy', 'reviewedAt']));
+                .hasOnly([
+                  'accountStatus', 'approvalStatus', 'status',
+                  'reviewedBy', 'reviewedAt', 'mustChangePassword',
+                  'blacklistReason', 'blacklistStatus', 'removedReason',
+                  'removedAt', 'roles', 'specialization', 'district',
+                  'municipality'
+                ]));
 
+      allow delete: if isAdmin();
+    }
+
+    match /username_index/{username} {
+      allow get: if true;
+      allow list: if false;
+      allow create, update: if isAdmin()
+        && request.resource.data.keys().hasOnly(['email', 'uid'])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.email is string;
       allow delete: if isAdmin();
     }
 
@@ -125,7 +193,7 @@ service cloud.firestore {
       allow create: if isAuthenticated()
         && request.resource.data.uid == request.auth.uid
         && request.resource.data.status == 'pending'
-        && request.resource.data.keys().hasAll(['uid', 'name', 'email', 'employeeId', 'status', 'createdAt']);
+        && request.resource.data.keys().hasAll(['uid', 'name', 'email', 'status']);
       allow update: if isAdmin();
       allow delete: if isAdmin();
     }
@@ -135,9 +203,9 @@ service cloud.firestore {
       allow create: if isAuthenticated()
         && request.resource.data.uid == request.auth.uid
         && request.resource.data.status == 'pending'
-        && request.resource.data.keys().hasAll(['uid', 'name', 'email', 'status', 'createdAt']);
+        && request.resource.data.keys().hasAll(['uid', 'name', 'email', 'status']);
       allow update: if isOfficial() || isAdmin();
-      allow delete: if isAdmin();
+      allow delete: if isOfficial() || isAdmin();
     }
 
     match /officialApplications/{applicationId} {
@@ -145,31 +213,56 @@ service cloud.firestore {
       allow create: if isAuthenticated()
         && request.resource.data.uid == request.auth.uid
         && request.resource.data.status == 'pending'
-        && request.resource.data.keys().hasAll(['uid', 'name', 'email', 'status', 'createdAt']);
+        && request.resource.data.keys().hasAll(['uid', 'name', 'email', 'status']);
       allow update: if isAdmin();
       allow delete: if isAdmin();
     }
 
     match /reports/{reportId} {
-      allow read: if isAuthenticated() && (
+      allow get: if isAuthenticated() && (
         resource.data.uid == request.auth.uid
+        || resource.data.citizenId == request.auth.uid
         || isOfficial()
         || isAdmin()
-        || (isWorker() && resource.data.assignedWorkerId == request.auth.uid)
-        || isPublic()
+        || isAssignedWorker()
+        || resource.data.publishedToFeed == true
+        || resource.data.citizenVisibility == 'public'
       );
 
+      allow list: if isOfficial() || isAdmin()
+        || (isAuthenticated() && resource.data.uid == request.auth.uid)
+        || (isAuthenticated() && resource.data.citizenId == request.auth.uid)
+        || (isAuthenticated() && resource.data.publishedToFeed == true)
+        || (isAuthenticated() && resource.data.citizenVisibility == 'public')
+        || (isWorker() && request.auth.uid in resource.data.assignedWorkerIds)
+        || (isWorker() && resource.data.assignedWorkerId == request.auth.uid)
+        || (isWorker() && resource.data.workerId == request.auth.uid);
+
       allow create: if isAuthenticated()
+        && notBlacklisted()
+        && (isPublic() || isAdmin())
         && request.resource.data.uid == request.auth.uid
-        && request.resource.data.title is string
         && request.resource.data.description is string
         && request.resource.data.status == 'submitted';
 
       allow update: if isOfficial() || isAdmin()
-        || (isWorker()
-            && resource.data.assignedWorkerId == request.auth.uid
-            && request.resource.data.uid == resource.data.uid
-            && request.resource.data.assignedWorkerId == resource.data.assignedWorkerId);
+        || (isAssignedWorker()
+            && request.resource.data.uid == resource.data.uid)
+        || (isAuthenticated()
+            && (resource.data.uid == request.auth.uid
+                || resource.data.citizenId == request.auth.uid)
+            && request.resource.data.diff(resource.data).affectedKeys()
+                .hasOnly([
+                  'citizenVisibility',
+                  'publishedToFeed',
+                  'publishedBudgetToFeed',
+                  'publishedAfterToFeed',
+                  'completionSharedWithPublic',
+                  'feedPostId',
+                  'isAnonymous',
+                  'updatedAt',
+                  'status'
+                ]));
 
       allow delete: if isAdmin();
 
@@ -179,6 +272,13 @@ service cloud.firestore {
           && request.resource.data.uid == request.auth.uid
           && request.resource.data.text is string;
         allow delete: if isAdmin() || isOwner(resource.data.uid);
+      }
+
+      match /timeline/{eventId} {
+        allow read: if isAuthenticated();
+        allow create: if isAuthenticated()
+          && request.resource.data.actorId == request.auth.uid;
+        allow update, delete: if false;
       }
     }
 
@@ -198,9 +298,46 @@ service cloud.firestore {
       }
     }
 
+    match /feedPosts/{postId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated()
+        && request.resource.data.uid == request.auth.uid;
+      allow update: if (isOwner(resource.data.uid)
+            && request.resource.data.diff(resource.data).affectedKeys()
+                .hasOnly(['text', 'caption', 'imageUrl', 'beforeImageUrl', 'afterImageUrl', 'updatedAt', 'isAnonymous', 'likedBy']))
+        || isAdmin()
+        || (isAuthenticated()
+            && request.resource.data.diff(resource.data).affectedKeys()
+                .hasOnly(['likedBy']));
+      allow delete: if isOwner(resource.data.uid) || isAdmin();
+
+      match /comments/{commentId} {
+        allow read: if isAuthenticated();
+        allow create: if isAuthenticated()
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0;
+        allow delete: if isAdmin() || isOwner(resource.data.uid);
+      }
+    }
+
     match /budgets/{budgetId} {
       allow read: if isAuthenticated();
-      allow create, update: if isOfficial() || isAdmin();
+      allow create, update: if isOfficial() || isAdmin() || isWorker();
+      allow delete: if isAdmin();
+    }
+
+    match /budgetRequests/{budgetId} {
+      allow read: if isAuthenticated();
+      allow create: if isWorker() || isOfficial() || isAdmin();
+      allow update: if isWorker() || isOfficial() || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /tasks/{taskId} {
+      allow read: if isAuthenticated();
+      allow create: if isOfficial() || isAdmin();
+      allow update: if isOfficial() || isAdmin() || isWorker();
       allow delete: if isAdmin();
     }
 
@@ -210,12 +347,35 @@ service cloud.firestore {
       allow create: if isAuthenticated()
         && request.resource.data.recipientUid is string
         && request.resource.data.title is string
-        && (isOfficial() || isAdmin()
+        && (isOfficial() || isAdmin() || isWorker() || isPublic()
             || request.resource.data.senderUid == request.auth.uid);
       allow update: if isAuthenticated()
         && resource.data.recipientUid == request.auth.uid
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read', 'readAt']);
       allow delete: if isAdmin() || resource.data.recipientUid == request.auth.uid;
+    }
+
+    match /blacklistedUsers/{id} {
+      allow read: if isAdmin() || isOfficial();
+      allow create, update: if isAdmin() || isOfficial();
+      allow delete: if isAdmin();
+    }
+
+    match /auditLogs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isAuthenticated()
+        && request.resource.data.actorId == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    match /appSettings/{id} {
+      allow get: if true;
+      allow list: if isAdmin();
+      allow create: if isAuthenticated()
+        && id == 'bootstrap'
+        && bootstrapOpen()
+        && request.resource.data.adminUid == request.auth.uid;
+      allow update, delete: if isAdmin();
     }
   }
 }
