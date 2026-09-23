@@ -2,7 +2,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:image_picker/image_picker.dart';
 
+import 'package:hamro_fix/core/utils/secure_password.dart';
 import 'package:hamro_fix/models/public_model.dart';
+import 'package:hamro_fix/services/audit_service.dart';
 import 'package:hamro_fix/services/auth_messages.dart';
 import 'package:hamro_fix/services/notification_service.dart';
 import 'package:hamro_fix/services/storage_service.dart';
@@ -16,21 +18,25 @@ class AuthServices {
   }) : _auth = auth ?? FirebaseAuth.instance,
        _firestore = firestore ?? FirebaseFirestore.instance,
        _storage = storage ?? StorageService(),
-       _notifications = notifications ?? NotificationService();
+       _notifications = notifications ?? NotificationService(),
+       _audit = AuditService();
 
   final FirebaseAuth _auth;
   final FirebaseFirestore _firestore;
   final StorageService _storage;
   final NotificationService _notifications;
+  final AuditService _audit;
 
   static const _users = 'users';
   static const _phoneIndex = 'phone_index';
   static const _accessRequests = 'access_requests';
   static const _workerApplications = 'workerApplications';
   static const _officialApplications = 'officialApplications';
+  static const _usernameIndex = 'username_index';
 
   User? get currentUser => _auth.currentUser;
   Stream<User?> get authStateChanges => _auth.authStateChanges();
+  Stream<User?> get userChanges => _auth.userChanges();
 
   String formatNepaliPhone(String phone) {
     final digits = phone.trim().replaceAll(RegExp(r'[\s-]'), '');
@@ -44,6 +50,7 @@ class AuthServices {
   Future<void> _ensureAuthToken(User user) async {
     await user.getIdToken(true);
     await user.reload();
+    await Future<void>.delayed(const Duration(milliseconds: 250));
   }
 
   Future<UserCredential> registerCitizen({
@@ -52,6 +59,7 @@ class AuthServices {
     required String phone,
     required String password,
     XFile? profileImage,
+    Map<String, dynamic>? extra,
   }) async {
     UserCredential? credential;
     try {
@@ -69,14 +77,6 @@ class AuthServices {
 
       await _ensureAuthToken(user);
       await user.updateDisplayName(fullName.trim());
-
-      String? profileImageUrl;
-      if (profileImage != null) {
-        profileImageUrl = await _storage.uploadXFile(
-          path: 'profile/${user.uid}/avatar.jpg',
-          file: profileImage,
-        );
-      }
 
       final formattedPhone = formatNepaliPhone(phone);
       await _writeUserProfile(
@@ -86,13 +86,42 @@ class AuthServices {
         phone: formattedPhone,
         role: UserRole.public,
         accountStatus: 'approved',
-        profileImageUrl: profileImageUrl,
+        extra: extra,
       );
-      await _writePhoneIndex(
-        phone: formattedPhone,
-        email: email.trim(),
-        uid: user.uid,
-      );
+      try {
+        await _writePhoneIndex(
+          phone: formattedPhone,
+          email: email.trim(),
+          uid: user.uid,
+        );
+      } catch (_) {}
+
+      if (profileImage != null) {
+        try {
+          final profileImageUrl = await _storage.encodeImage(
+            profileImage,
+            maxWidth: 240,
+            maxBytes: 80000,
+          );
+          if (profileImageUrl != null) {
+            await _firestore.collection(_users).doc(user.uid).set({
+              'profileImageUrl': profileImageUrl,
+            }, SetOptions(merge: true));
+          }
+        } catch (_) {}
+      }
+
+      try {
+        await user.sendEmailVerification();
+      } catch (_) {}
+      try {
+        await _audit.log(
+          action: 'citizen_registered',
+          targetType: 'user',
+          targetId: user.uid,
+          actorRole: UserRole.public,
+        );
+      } catch (_) {}
       return credential;
     } catch (e) {
       await _rollbackNewUser(credential);
@@ -100,21 +129,31 @@ class AuthServices {
     }
   }
 
-  Future<UserCredential> registerWorker({
+  Future<void> registerWorker({
     required String fullName,
     required String email,
     required String phone,
-    required String password,
+    String? password,
     required Map<String, dynamic> extra,
     XFile? passportPhoto,
     XFile? citizenshipFront,
     XFile? citizenshipBack,
   }) async {
+    final existing = _auth.currentUser;
+    if (existing != null) {
+      throw const AuthFailure(
+        'Each email can be used for only one role. Sign out, then register the worker with a new email.',
+      );
+    }
+
     UserCredential? credential;
     try {
+      final generated = (password == null || password.isEmpty)
+          ? SecurePassword.generate()
+          : password;
       credential = await _auth.createUserWithEmailAndPassword(
         email: email.trim(),
-        password: password,
+        password: generated,
       );
       final user = credential.user;
       if (user == null) {
@@ -125,32 +164,80 @@ class AuthServices {
       }
       await _ensureAuthToken(user);
       await user.updateDisplayName(fullName.trim());
-      final formattedPhone = formatNepaliPhone(phone);
-
-      String? profileImageUrl;
-      String? frontUrl;
-      String? backUrl;
-      if (passportPhoto != null) {
-        profileImageUrl = await _storage.uploadXFile(
-          path: 'applications/workers/${user.uid}/passport.jpg',
-          file: passportPhoto,
-        );
-      }
-      if (citizenshipFront != null) {
-        frontUrl = await _storage.uploadXFile(
-          path: 'applications/workers/${user.uid}/citizenship_front.jpg',
-          file: citizenshipFront,
-        );
-      }
-      if (citizenshipBack != null) {
-        backUrl = await _storage.uploadXFile(
-          path: 'applications/workers/${user.uid}/citizenship_back.jpg',
-          file: citizenshipBack,
-        );
-      }
-
-      await _writeUserProfile(
+      await _submitWorkerApplication(
         uid: user.uid,
+        fullName: fullName,
+        email: email,
+        phone: phone,
+        extra: extra,
+        passportPhoto: passportPhoto,
+        citizenshipFront: citizenshipFront,
+        citizenshipBack: citizenshipBack,
+        generatedPassword: generated,
+        createProfile: true,
+        signOutAfter: true,
+      );
+    } catch (e) {
+      await _rollbackNewUser(credential);
+      rethrow;
+    }
+  }
+
+  Future<void> _submitWorkerApplication({
+    required String uid,
+    required String fullName,
+    required String email,
+    required String phone,
+    required Map<String, dynamic> extra,
+    required XFile? passportPhoto,
+    required XFile? citizenshipFront,
+    required XFile? citizenshipBack,
+    required String? generatedPassword,
+    required bool createProfile,
+    required bool signOutAfter,
+  }) async {
+    final existingApp = await _firestore
+        .collection(_workerApplications)
+        .doc(uid)
+        .get();
+    if (existingApp.exists && existingApp.data()?['status'] == 'pending') {
+      throw const AuthFailure(
+        'A worker application for this account is already waiting for review.',
+      );
+    }
+    if (existingApp.exists && existingApp.data()?['status'] == 'approved') {
+      throw const AuthFailure('This account already has worker access.');
+    }
+
+    final formattedPhone = formatNepaliPhone(phone);
+    String? profileImageUrl;
+    String? frontUrl;
+    String? backUrl;
+    if (passportPhoto != null) {
+      profileImageUrl = await _storage.encodeImage(
+        passportPhoto,
+        maxWidth: 240,
+        maxBytes: 80000,
+      );
+    }
+    if (citizenshipFront != null) {
+      frontUrl = await _storage.encodeImage(
+        citizenshipFront,
+        maxWidth: 200,
+        maxBytes: 80000,
+      );
+    }
+    if (citizenshipBack != null) {
+      backUrl = await _storage.encodeImage(
+        citizenshipBack,
+        maxWidth: 200,
+        maxBytes: 80000,
+      );
+    }
+
+    if (createProfile) {
+      await _writeUserProfile(
+        uid: uid,
         name: fullName.trim(),
         email: email.trim(),
         phone: formattedPhone,
@@ -159,31 +246,60 @@ class AuthServices {
         profileImageUrl: profileImageUrl,
         extra: {
           'specialization': extra['specialization'],
+          'district': extra['district'],
+          'municipality': extra['municipality'],
+          'mustChangePassword': true,
         }..removeWhere((key, value) => value == null),
       );
+    } else {
+      await _firestore
+          .collection(_users)
+          .doc(uid)
+          .set(
+            {
+              'specialization': extra['specialization'],
+              'district': extra['district'],
+              'municipality': extra['municipality'],
+              if (profileImageUrl != null) 'profileImageUrl': profileImageUrl,
+              'updatedAt': FieldValue.serverTimestamp(),
+            }..removeWhere((key, value) => value == null),
+            SetOptions(merge: true),
+          );
+    }
 
-      await _firestore.collection(_workerApplications).doc(user.uid).set({
-        'uid': user.uid,
-        'name': fullName.trim(),
-        'email': email.trim(),
-        'phone': formattedPhone,
-        'status': 'pending',
-        'profileImageUrl': profileImageUrl,
-        'citizenshipFrontUrl': frontUrl,
-        'citizenshipBackUrl': backUrl,
-        'createdAt': FieldValue.serverTimestamp(),
-        ...extra,
-      }..removeWhere((key, value) => value == null));
+    await _firestore
+        .collection(_workerApplications)
+        .doc(uid)
+        .set(
+          {
+            'uid': uid,
+            'name': fullName.trim(),
+            'email': email.trim(),
+            'phone': formattedPhone,
+            'status': 'pending',
+            'profileImageUrl': profileImageUrl,
+            'citizenshipFrontUrl': frontUrl,
+            'citizenshipBackUrl': backUrl,
+            if (generatedPassword != null)
+              'temporaryPassword': generatedPassword,
+            'createdAt': FieldValue.serverTimestamp(),
+            ...extra,
+          }..removeWhere((key, value) => value == null),
+        );
 
-      await _writePhoneIndex(
-        phone: formattedPhone,
-        email: email.trim(),
-        uid: user.uid,
-      );
-      return credential;
-    } catch (e) {
-      await _rollbackNewUser(credential);
-      rethrow;
+    await _writePhoneIndex(
+      phone: formattedPhone,
+      email: email.trim(),
+      uid: uid,
+    );
+    await _audit.log(
+      action: 'worker_application_submitted',
+      targetType: 'workerApplication',
+      targetId: uid,
+      actorRole: UserRole.worker,
+    );
+    if (signOutAfter) {
+      await _auth.signOut();
     }
   }
 
@@ -191,13 +307,20 @@ class AuthServices {
     required String fullName,
     required String email,
     required String employeeId,
-    required String password,
+    String? password,
+    String? phone,
+    String? department,
+    String? municipality,
+    XFile? profileImage,
   }) async {
     UserCredential? credential;
     try {
+      final loginPassword = (password == null || password.isEmpty)
+          ? SecurePassword.generate()
+          : password;
       credential = await _auth.createUserWithEmailAndPassword(
         email: email.trim(),
-        password: password,
+        password: loginPassword,
       );
       final user = credential.user;
       if (user == null) {
@@ -208,28 +331,58 @@ class AuthServices {
       }
       await _ensureAuthToken(user);
       await user.updateDisplayName(fullName.trim());
+      String? profileImageUrl;
+      if (profileImage != null) {
+        profileImageUrl = await _storage.encodeImage(
+          profileImage,
+          maxWidth: 240,
+          maxBytes: 80000,
+        );
+      }
       await _writeUserProfile(
         uid: user.uid,
         name: fullName.trim(),
         email: email.trim(),
-        phone: '',
+        phone: (phone == null || phone.trim().isEmpty)
+            ? ''
+            : formatNepaliPhone(phone),
         role: UserRole.official,
         accountStatus: 'pending',
-        extra: {'employeeId': employeeId.trim()},
+        profileImageUrl: profileImageUrl,
+        extra: {
+          'employeeId': employeeId.trim(),
+          'department': department,
+          'municipality': municipality,
+          'mustChangePassword': true,
+        }..removeWhere((key, value) => value == null),
       );
       final payload = {
         'uid': user.uid,
         'name': fullName.trim(),
         'email': email.trim(),
+        'phone': (phone == null || phone.trim().isEmpty)
+            ? null
+            : formatNepaliPhone(phone),
         'employeeId': employeeId.trim(),
+        'department': department,
+        'municipality': municipality,
+        'profileImageUrl': profileImageUrl,
         'status': 'pending',
+        'temporaryPassword': loginPassword,
         'createdAt': FieldValue.serverTimestamp(),
-      };
+      }..removeWhere((key, value) => value == null);
       await _firestore.collection(_accessRequests).doc(user.uid).set(payload);
       await _firestore
           .collection(_officialApplications)
           .doc(user.uid)
           .set(payload);
+      await _audit.log(
+        action: 'official_application_submitted',
+        targetType: 'officialApplication',
+        targetId: user.uid,
+        actorRole: UserRole.official,
+      );
+      await _auth.signOut();
     } catch (e) {
       await _rollbackNewUser(credential);
       rethrow;
@@ -242,9 +395,12 @@ class AuthServices {
     String? expectedRole,
     String? employeeId,
   }) async {
+    try {
+      await _firestore.enableNetwork();
+    } catch (_) {}
     final credential = await _auth.signInWithEmailAndPassword(
       email: email.trim(),
-      password: password,
+      password: password.trim(),
     );
     try {
       await _assertLoginProfile(
@@ -255,6 +411,9 @@ class AuthServices {
       final uid = credential.user?.uid;
       if (uid != null) {
         await _notifications.saveFcmToken(uid);
+        if (expectedRole == UserRole.admin) {
+          await _ensureAdminUsernameIndex(uid);
+        }
       }
       return credential;
     } catch (e) {
@@ -272,6 +431,65 @@ class AuthServices {
       password: password,
       expectedRole: UserRole.public,
     );
+  }
+
+  Future<UserCredential> loginAdmin({
+    required String identifier,
+    required String password,
+  }) async {
+    final trimmed = identifier.trim();
+    if (trimmed.isEmpty) {
+      throw const AuthFailure('Enter your admin email or username.');
+    }
+    final email = trimmed.contains('@')
+        ? trimmed
+        : await _resolveAdminEmail(trimmed);
+    return loginWithEmail(
+      email: email,
+      password: password,
+      expectedRole: UserRole.admin,
+    );
+  }
+
+  Future<String> _resolveAdminEmail(String username) async {
+    final key = username.trim().toLowerCase();
+    final snapshot = await _firestore.collection(_usernameIndex).doc(key).get();
+    final email = snapshot.data()?['email'] as String?;
+    if (email != null && email.isNotEmpty) return email;
+    throw const AuthFailure(
+      'This admin username is not registered. Sign in with the admin email from Firebase Authentication, then set a username in Profile.',
+    );
+  }
+
+  Future<void> _ensureAdminUsernameIndex(String uid) async {
+    try {
+      final profile = await fetchProfile(uid);
+      final username = (profile?.username ?? '').trim().toLowerCase();
+      final email = profile?.email ?? _auth.currentUser?.email;
+      if (username.isEmpty || email == null || email.isEmpty) return;
+      await _firestore.collection(_usernameIndex).doc(username).set({
+        'email': email,
+        'uid': uid,
+      });
+    } catch (_) {}
+  }
+
+  Future<void> saveAdminUsername(String username) async {
+    final user = _auth.currentUser;
+    if (user == null || user.email == null) {
+      throw FirebaseAuthException(code: 'user-not-found');
+    }
+    final key = username.trim().toLowerCase();
+    if (key.isEmpty || key.contains(' ')) {
+      throw const AuthFailure('Enter a username without spaces.');
+    }
+    await _firestore.collection(_users).doc(user.uid).set({
+      'username': key,
+    }, SetOptions(merge: true));
+    await _firestore.collection(_usernameIndex).doc(key).set({
+      'email': user.email,
+      'uid': user.uid,
+    });
   }
 
   Future<UserCredential> loginWithPhone({
@@ -327,10 +545,12 @@ class AuthServices {
       'phone': formatNepaliPhone(phone),
     };
     if (profileImage != null) {
-      data['profileImageUrl'] = await _storage.uploadXFile(
-        path: 'profile/$uid/avatar.jpg',
-        file: profileImage,
+      final encoded = await _storage.encodeImage(
+        profileImage,
+        maxWidth: 240,
+        maxBytes: 80000,
       );
+      if (encoded != null) data['profileImageUrl'] = encoded;
     }
     await _firestore.collection(_users).doc(uid).update(data);
   }
@@ -383,6 +603,7 @@ class AuthServices {
       'email': request.email,
       'phone': request.phone ?? '',
       'role': UserRole.official,
+      'roles': [UserRole.official],
       'employeeId': request.employeeId,
       'accountStatus': 'approved',
       'approvalStatus': 'approved',
@@ -405,9 +626,15 @@ class AuthServices {
       recipientUid: request.uid,
       title: 'Official access approved',
       body:
-          'Your official application for ${request.email} was approved. You can now sign in to the official dashboard.',
+          'Your HamroFix official account was approved. Check email for your sign-in details, then open Official Sign In.',
       type: 'official_approval',
       relatedId: request.id,
+    );
+    await _audit.log(
+      action: 'official_approved',
+      targetType: 'user',
+      targetId: request.uid,
+      actorRole: UserRole.admin,
     );
   }
 
@@ -444,6 +671,8 @@ class AuthServices {
     await _firestore.collection(_users).doc(application.uid).set({
       'accountStatus': 'approved',
       'approvalStatus': 'approved',
+      'role': UserRole.worker,
+      'roles': [UserRole.worker],
       'reviewedBy': official.uid,
       'reviewedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
@@ -457,17 +686,31 @@ class AuthServices {
       recipientUid: application.uid,
       title: 'Worker application approved',
       body:
-          'Your worker application for ${application.email} has been approved. Sign in to activate your worker dashboard. Use Forgot password if you need to set a new password.',
+          'Your HamroFix worker account was approved. Check email for your sign-in details, then open Worker Sign In.',
       type: 'worker_approval',
       relatedId: application.id,
+    );
+    await _audit.log(
+      action: 'worker_approved',
+      targetType: 'user',
+      targetId: application.uid,
+      actorRole: UserRole.official,
     );
   }
 
   Future<void> rejectWorkerApplication(WorkerApplication application) async {
     final official = _auth.currentUser;
+    final profile = await fetchProfile(application.uid);
+    final keepAccount =
+        profile != null &&
+        (profile.hasRole(UserRole.official) ||
+            profile.hasRole(UserRole.public) ||
+            profile.hasRole(UserRole.admin));
     await _firestore.collection(_users).doc(application.uid).set({
-      'accountStatus': 'rejected',
-      'approvalStatus': 'rejected',
+      if (!keepAccount) ...{
+        'accountStatus': 'rejected',
+        'approvalStatus': 'rejected',
+      },
     }, SetOptions(merge: true));
     await _updateApplicationStatus(
       collection: _workerApplications,
@@ -481,6 +724,100 @@ class AuthServices {
       body: 'Your worker application was not approved.',
       type: 'worker_rejection',
       relatedId: application.id,
+    );
+  }
+
+  Future<void> blacklistWorker({
+    required WorkerApplication application,
+    required String reason,
+  }) async {
+    final official = _auth.currentUser;
+    if (official == null) {
+      throw FirebaseAuthException(code: 'user-not-found');
+    }
+    final trimmed = reason.trim();
+    if (trimmed.length < 8) {
+      throw const AuthFailure('Enter a clear reason (at least 8 characters).');
+    }
+    await _firestore.collection(_users).doc(application.uid).set({
+      'accountStatus': 'blacklisted',
+      'approvalStatus': 'blacklisted',
+      'status': 'blacklisted',
+      'blacklistReason': trimmed,
+      'blacklistStatus': 'active',
+      'reviewedBy': official.uid,
+      'reviewedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+    await _firestore.collection('blacklistedUsers').doc(application.uid).set({
+      'workerId': application.uid,
+      'name': application.name,
+      'email': application.email,
+      'role': UserRole.worker,
+      'reason': trimmed,
+      'blacklistedBy': official.uid,
+      'blacklistedAt': FieldValue.serverTimestamp(),
+      'status': 'active',
+    });
+    await _updateApplicationStatus(
+      collection: _workerApplications,
+      id: application.id,
+      status: 'blacklisted',
+      reviewerUid: official.uid,
+    );
+    await _notifications.send(
+      recipientUid: application.uid,
+      title: 'Worker account blacklisted',
+      body: 'Your worker account was blacklisted. Reason: $trimmed',
+      type: 'blacklist',
+      relatedId: application.id,
+    );
+    await _audit.log(
+      action: 'worker_blacklisted',
+      targetType: 'user',
+      targetId: application.uid,
+      actorRole: UserRole.official,
+      metadata: {'reason': trimmed},
+    );
+  }
+
+  Future<void> deleteWorkerProfile({
+    required WorkerApplication application,
+    required String reason,
+  }) async {
+    final official = _auth.currentUser;
+    if (official == null) {
+      throw FirebaseAuthException(code: 'user-not-found');
+    }
+    final trimmed = reason.trim();
+    if (trimmed.length < 8) {
+      throw const AuthFailure('Enter a clear reason (at least 8 characters).');
+    }
+    await _firestore.collection(_users).doc(application.uid).set({
+      'accountStatus': 'disabled',
+      'approvalStatus': 'disabled',
+      'status': 'removed',
+      'removedReason': trimmed,
+      'removedAt': FieldValue.serverTimestamp(),
+      'reviewedBy': official.uid,
+      'reviewedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+    await _firestore
+        .collection(_workerApplications)
+        .doc(application.id)
+        .delete();
+    await _notifications.send(
+      recipientUid: application.uid,
+      title: 'Worker profile removed',
+      body: 'Your worker profile was removed. Reason: $trimmed',
+      type: 'worker_removed',
+      relatedId: application.id,
+    );
+    await _audit.log(
+      action: 'worker_profile_deleted',
+      targetType: 'user',
+      targetId: application.uid,
+      actorRole: UserRole.official,
+      metadata: {'reason': trimmed},
     );
   }
 
@@ -529,6 +866,61 @@ class AuthServices {
     await _auth.signOut();
   }
 
+  Future<void> sendStaffLoginEmail(String email) async {
+    await _auth.sendPasswordResetEmail(email: email.trim());
+  }
+
+  Future<void> sendOfficialLoginEmail(String email) =>
+      sendStaffLoginEmail(email);
+
+  String staffWelcomeMessage({
+    required String name,
+    required String email,
+    required String roleLabel,
+    String? temporaryPassword,
+    String? extraLine,
+  }) {
+    final password = (temporaryPassword ?? '').trim();
+    final buffer = StringBuffer()
+      ..writeln('Hello $name,')
+      ..writeln()
+      ..writeln('Your HamroFix $roleLabel account has been approved.')
+      ..writeln('Sign in email: $email');
+    if (extraLine != null && extraLine.trim().isNotEmpty) {
+      buffer.writeln(extraLine.trim());
+    }
+    if (password.isNotEmpty) {
+      buffer
+        ..writeln('Temporary password: $password')
+        ..writeln()
+        ..writeln(
+          'Use this email and password on the $roleLabel sign-in page. Change the password after you sign in.',
+        );
+    } else {
+      buffer
+        ..writeln()
+        ..writeln(
+          'Open the HamroFix password email, set a new password, then sign in as a $roleLabel.',
+        );
+    }
+    buffer
+      ..writeln()
+      ..writeln('HamroFix');
+    return buffer.toString();
+  }
+
+  String officialWelcomeMessage(AccessRequest request) {
+    return staffWelcomeMessage(
+      name: request.name,
+      email: request.email,
+      roleLabel: 'official',
+      temporaryPassword: request.temporaryPassword,
+      extraLine: request.employeeId.isEmpty
+          ? null
+          : 'Employee ID (optional): ${request.employeeId}',
+    );
+  }
+
   Future<void> _assertLoginProfile({
     required String? uid,
     String? expectedRole,
@@ -557,20 +949,27 @@ class AuthServices {
         'Your account role has not been configured. Please contact the administrator.',
       );
     }
-    if (expectedRole != null && profile.normalizedRole != expectedRole) {
+    if (expectedRole != null &&
+        UserRole.normalize(profile.role) != UserRole.normalize(expectedRole)) {
       throw const AuthFailure(
-        'You do not have permission to access this page.',
+        'This email is registered for a different role. Use that role\'s sign-in page, or a different email.',
       );
-    }
-    if (expectedRole == UserRole.official &&
-        employeeId != null &&
-        employeeId.trim().isNotEmpty &&
-        (profile.employeeId ?? '') != employeeId.trim()) {
-      throw const AuthFailure('Invalid email or password.');
     }
     if (profile.status == 'rejected') {
       throw const AuthFailure(
         'This application was not approved. Please contact the administrator.',
+      );
+    }
+    if (profile.status == 'blacklisted') {
+      throw const AuthFailure(
+        'This account is blacklisted. Please contact the administrator.',
+      );
+    }
+    if (profile.status == 'suspended' ||
+        profile.status == 'disabled' ||
+        profile.status == 'removed') {
+      throw const AuthFailure(
+        'This account is currently restricted. Please contact the administrator.',
       );
     }
   }
@@ -585,19 +984,58 @@ class AuthServices {
     String? profileImageUrl,
     Map<String, dynamic>? extra,
   }) async {
-    await _firestore.collection(_users).doc(uid).set({
+    final payload = {
       'uid': uid,
       'name': name,
       'fullName': name,
       'email': email,
       'phone': phone,
       'role': role,
+      'roles': [role],
       'accountStatus': accountStatus,
       'approvalStatus': accountStatus,
+      'status': accountStatus == 'approved' ? 'active' : accountStatus,
       'profileImageUrl': profileImageUrl,
       'createdAt': FieldValue.serverTimestamp(),
       ...?extra,
-    });
+    };
+    try {
+      await _firestore.collection(_users).doc(uid).set(payload);
+    } on FirebaseException catch (e) {
+      if (e.code != 'permission-denied') rethrow;
+      await _ensureAuthToken(_auth.currentUser ?? (throw e));
+      await _firestore.collection(_users).doc(uid).set(payload);
+    }
+  }
+
+  Future<void> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    final user = _auth.currentUser;
+    final email = user?.email;
+    if (user == null || email == null) {
+      throw FirebaseAuthException(code: 'user-not-found');
+    }
+    final cred = EmailAuthProvider.credential(
+      email: email,
+      password: currentPassword,
+    );
+    await user.reauthenticateWithCredential(cred);
+    await user.updatePassword(newPassword);
+    await _firestore.collection(_users).doc(user.uid).set({
+      'mustChangePassword': false,
+    }, SetOptions(merge: true));
+  }
+
+  Future<void> sendVerificationEmail() async {
+    final user = _auth.currentUser;
+    if (user == null) return;
+    await user.sendEmailVerification();
+  }
+
+  Future<void> reloadCurrentUser() async {
+    await _auth.currentUser?.reload();
   }
 
   Future<void> _writePhoneIndex({
@@ -634,6 +1072,63 @@ class AuthServices {
       await user.delete();
     } catch (_) {
       await _auth.signOut();
+    }
+  }
+
+  Future<bool> isAdminBootstrapOpen() async {
+    final doc = await _firestore
+        .collection('appSettings')
+        .doc('bootstrap')
+        .get();
+    return !doc.exists;
+  }
+
+  Future<void> bootstrapFirstAdmin({
+    required String fullName,
+    required String email,
+    required String password,
+    String username = 'admin',
+  }) async {
+    if (!await isAdminBootstrapOpen()) {
+      throw const AuthFailure(
+        'An admin account already exists. Please sign in.',
+      );
+    }
+    UserCredential? credential;
+    try {
+      credential = await _auth.createUserWithEmailAndPassword(
+        email: email.trim(),
+        password: password,
+      );
+      final user = credential.user;
+      if (user == null) {
+        throw FirebaseAuthException(
+          code: 'internal-error',
+          message: 'Account creation failed.',
+        );
+      }
+      await _ensureAuthToken(user);
+      await user.updateDisplayName(fullName.trim());
+      await _writeUserProfile(
+        uid: user.uid,
+        name: fullName.trim(),
+        email: email.trim(),
+        phone: '',
+        role: UserRole.admin,
+        accountStatus: 'approved',
+        extra: {'username': username.trim().toLowerCase()},
+      );
+      await _firestore.collection('appSettings').doc('bootstrap').set({
+        'adminUid': user.uid,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+      await _firestore
+          .collection(_usernameIndex)
+          .doc(username.trim().toLowerCase())
+          .set({'email': email.trim(), 'uid': user.uid});
+    } catch (e) {
+      await _rollbackNewUser(credential);
+      rethrow;
     }
   }
 }
