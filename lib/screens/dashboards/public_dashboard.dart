@@ -1,14 +1,20 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
+import 'package:hamro_fix/core/constants/app_constants.dart';
+import 'package:hamro_fix/core/l10n/app_locale.dart';
 import 'package:hamro_fix/models/public_model.dart';
 import 'package:hamro_fix/screens/dashboards/dashboard_widgets.dart';
+import 'package:hamro_fix/screens/dashboards/shared_tabs.dart';
+import 'package:hamro_fix/screens/reports/report_details_page.dart';
+import 'package:hamro_fix/services/auth_messages.dart';
+import 'package:hamro_fix/services/location_service.dart';
 import 'package:hamro_fix/services/report_service.dart';
+import 'package:hamro_fix/widgets/stored_image.dart';
 
 // Brand Light Green Theme Colors
 const Color kPrimaryGreen = Color(0xFF1B5E20);
@@ -29,49 +35,12 @@ class _PublicDashboardState extends State<PublicDashboard> {
 
   Future<void> _handleLogout(BuildContext context) async {
     HapticFeedback.lightImpact();
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        title: const Text('Log Out'),
-        content: const Text('Are you sure you want to log out from HamroFix?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFB71C1C),
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(10),
-              ),
-            ),
-            child: const Text('Log Out'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirm == true) {
-      await FirebaseAuth.instance.signOut();
-    }
+    await confirmAndLogout(context);
   }
 
   @override
   Widget build(BuildContext context) {
-    final reportService = ReportService();
-
-    final List<Widget> pages = [
-      InteractiveCreateReportTab(profile: widget.profile),
-      TikTokReportFeed(
-        stream: reportService.watchMyReports(widget.profile.uid),
-      ),
-      const NotificationsTab(),
-      ProfileTab(profile: widget.profile),
-    ];
+    final loc = LocaleScope.of(context);
 
     return Scaffold(
       backgroundColor: kLightGreenBg,
@@ -79,41 +48,29 @@ class _PublicDashboardState extends State<PublicDashboard> {
         elevation: 0,
         backgroundColor: Colors.white,
         surfaceTintColor: Colors.transparent,
-        title: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(6),
-              decoration: BoxDecoration(
-                color: kLightGreenBg,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: const Icon(
-                Icons.build_circle_rounded,
-                color: kPrimaryGreen,
-                size: 24,
-              ),
-            ),
-            const SizedBox(width: 10),
-            const Text(
-              'HamroFix',
-              style: TextStyle(
-                fontWeight: FontWeight.w800,
-                color: Color(0xFF1C1B1F),
-                letterSpacing: -0.5,
-              ),
-            ),
-          ],
+        title: HamroFixBarTitle(
+          subtitle: widget.profile.displayName,
         ),
         actions: [
           IconButton(
             icon: const Icon(Icons.logout_rounded, color: Color(0xFFB71C1C)),
-            tooltip: 'Log Out',
+            tooltip: loc.t('Log out', 'लग आउट'),
             onPressed: () => _handleLogout(context),
           ),
           const SizedBox(width: 8),
         ],
       ),
-      body: pages[_currentIndex],
+      body: IndexedStack(
+        index: _currentIndex,
+        children: [
+          InteractiveCreateReportTab(profile: widget.profile),
+          _MyReportsTab(profile: widget.profile),
+          FeedTab(profile: widget.profile),
+          FeedTab(profile: widget.profile, mineOnly: true),
+          NotificationsTab(uid: widget.profile.uid, profile: widget.profile),
+          ProfileTab(profile: widget.profile),
+        ],
+      ),
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
           color: Colors.white,
@@ -137,26 +94,36 @@ class _PublicDashboardState extends State<PublicDashboard> {
           type: BottomNavigationBarType.fixed,
           backgroundColor: Colors.white,
           elevation: 0,
-          items: const [
+          items: [
             BottomNavigationBarItem(
-              icon: Icon(Icons.add_location_alt_outlined),
-              activeIcon: Icon(Icons.add_location_alt_rounded),
-              label: 'Report',
+              icon: const Icon(Icons.add_location_alt_outlined),
+              activeIcon: const Icon(Icons.add_location_alt_rounded),
+              label: AppLocale.instance.t('Report', 'रिपोर्ट'),
             ),
             BottomNavigationBarItem(
-              icon: Icon(Icons.video_library_outlined),
-              activeIcon: Icon(Icons.video_library_rounded),
-              label: 'My Feed',
+              icon: const Icon(Icons.receipt_long_outlined),
+              activeIcon: const Icon(Icons.receipt_long_rounded),
+              label: AppLocale.instance.t('My IDs', 'मेरा आईडी'),
             ),
             BottomNavigationBarItem(
-              icon: Icon(Icons.notifications_none_rounded),
-              activeIcon: Icon(Icons.notifications_rounded),
-              label: 'Alerts',
+              icon: const Icon(Icons.public_outlined),
+              activeIcon: const Icon(Icons.public_rounded),
+              label: AppLocale.instance.t('Public', 'सार्वजनिक'),
             ),
             BottomNavigationBarItem(
-              icon: Icon(Icons.person_outline_rounded),
-              activeIcon: Icon(Icons.person_rounded),
-              label: 'Profile',
+              icon: const Icon(Icons.video_library_outlined),
+              activeIcon: const Icon(Icons.video_library_rounded),
+              label: AppLocale.instance.t('My Feed', 'मेरो फिड'),
+            ),
+            BottomNavigationBarItem(
+              icon: const Icon(Icons.notifications_none_rounded),
+              activeIcon: const Icon(Icons.notifications_rounded),
+              label: AppLocale.instance.t('Alerts', 'सूचना'),
+            ),
+            BottomNavigationBarItem(
+              icon: const Icon(Icons.person_outline_rounded),
+              activeIcon: const Icon(Icons.person_rounded),
+              label: AppLocale.instance.t('Profile', 'प्रोफाइल'),
             ),
           ],
         ),
@@ -181,6 +148,7 @@ class _InteractiveCreateReportTabState
     extends State<InteractiveCreateReportTab> {
   final ImagePicker _picker = ImagePicker();
   final TextEditingController _descController = TextEditingController();
+  final MapController _mapController = MapController();
 
   XFile? _mediaFile;
   bool _isVideo = false;
@@ -191,15 +159,9 @@ class _InteractiveCreateReportTabState
   ); // Kathmandu default
   String _selectedMunicipality = 'Kathmandu Metropolitan';
   bool _isSubmitting = false;
+  bool _locating = false;
 
-  final List<String> _categories = [
-    'Pothole / Road Damage',
-    'Garbage & Waste',
-    'Water Pipe Leak',
-    'Streetlight Fault',
-    'Drainage Blockage',
-    'Public Safety / Other',
-  ];
+  final List<String> _categories = ReportCategories.all;
 
   final List<String> _municipalities = [
     'Kathmandu Metropolitan',
@@ -213,7 +175,25 @@ class _InteractiveCreateReportTabState
   @override
   void dispose() {
     _descController.dispose();
+    _mapController.dispose();
     super.dispose();
+  }
+
+  Future<void> _useCurrentLocation() async {
+    setState(() => _locating = true);
+    try {
+      final location = await LocationService().captureCurrent();
+      final point = LatLng(location.latitude, location.longitude);
+      setState(() => _selectedLocation = point);
+      _mapController.move(point, 16);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(AuthMessages.from(e))));
+    } finally {
+      if (mounted) setState(() => _locating = false);
+    }
   }
 
   Future<void> _pickMedia(ImageSource source, {bool isVideo = false}) async {
@@ -242,15 +222,49 @@ class _InteractiveCreateReportTabState
       );
       return;
     }
+    if (_descController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please describe the issue.')),
+      );
+      return;
+    }
+    if (widget.profile.isBlacklisted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('This account cannot submit new reports.'),
+        ),
+      );
+      return;
+    }
 
     setState(() => _isSubmitting = true);
     try {
-      await Future<void>.delayed(const Duration(seconds: 2));
+      final location = await LocationService().captureCurrent();
+      setState(() {
+        _selectedLocation = LatLng(location.latitude, location.longitude);
+      });
+      await ReportService().createReport(
+        title: _selectedCategory!,
+        description: _descController.text,
+        category: _selectedCategory!,
+        image: _isVideo ? null : _mediaFile,
+        video: _isVideo ? _mediaFile : null,
+        latitude: location.latitude,
+        longitude: location.longitude,
+        locationTimestamp: location.timestamp,
+        municipality: _selectedMunicipality,
+        address: _selectedMunicipality,
+      );
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: const Text('Report submitted successfully!'),
+          content: Text(
+            AppLocale.instance.t(
+              'Report submitted successfully!',
+              'रिपोर्ट सफलतापूर्वक पठाइयो!',
+            ),
+          ),
           backgroundColor: kPrimaryGreen,
           behavior: SnackBarBehavior.floating,
           shape: RoundedRectangleBorder(
@@ -268,7 +282,7 @@ class _InteractiveCreateReportTabState
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Submission failed: $e')));
+      ).showSnackBar(SnackBar(content: Text(AuthMessages.from(e))));
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
     }
@@ -276,221 +290,295 @@ class _InteractiveCreateReportTabState
 
   @override
   Widget build(BuildContext context) {
+    final loc = LocaleScope.of(context);
+    final name = widget.profile.displayName;
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
-            'Report a Public Issue',
-            style: Theme.of(context).textTheme.titleLarge?.copyWith(
-              fontWeight: FontWeight.bold,
-              color: kPrimaryGreen,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Follow simple steps to alert local government authorities.',
-            style: TextStyle(color: Colors.grey.shade700, fontSize: 13),
-          ),
-          const SizedBox(height: 20),
-
-          // 1. Media Upload
-          _buildSectionHeader(
-            '1. Media Proof (Photo / Video)',
-            Icons.camera_alt_rounded,
-          ),
-          const SizedBox(height: 10),
           Container(
-            height: 180,
+            padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
             decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: kAccentGreen, width: 1.5),
-            ),
-            child: _mediaFile == null
-                ? Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      _buildMediaTile(
-                        icon: Icons.photo_camera_rounded,
-                        label: 'Take Photo',
-                        onTap: () => _pickMedia(ImageSource.camera),
-                      ),
-                      _buildMediaTile(
-                        icon: Icons.videocam_rounded,
-                        label: 'Record Video',
-                        onTap: () =>
-                            _pickMedia(ImageSource.camera, isVideo: true),
-                      ),
-                      _buildMediaTile(
-                        icon: Icons.collections_rounded,
-                        label: 'Gallery',
-                        onTap: () => _pickMedia(ImageSource.gallery),
-                      ),
-                    ],
-                  )
-                : Stack(
-                    children: [
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(16),
-                        child: Image.file(
-                          File(_mediaFile!.path),
-                          width: double.infinity,
-                          height: 180,
-                          fit: BoxFit.cover,
-                        ),
-                      ),
-                      Positioned(
-                        top: 8,
-                        right: 8,
-                        child: CircleAvatar(
-                          backgroundColor: Colors.black54,
-                          child: IconButton(
-                            icon: const Icon(Icons.close, color: Colors.white),
-                            onPressed: () => setState(() => _mediaFile = null),
-                          ),
-                        ),
-                      ),
-                      if (_isVideo)
-                        const Center(
-                          child: Icon(
-                            Icons.play_circle_fill_rounded,
-                            color: Colors.white,
-                            size: 48,
-                          ),
-                        ),
-                    ],
-                  ),
-          ),
-          const SizedBox(height: 24),
-
-          // 2. Category Selection
-          _buildSectionHeader('2. Issue Category', Icons.category_rounded),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: _categories.map((cat) {
-              final isSelected = _selectedCategory == cat;
-              return ChoiceChip(
-                label: Text(cat),
-                selected: isSelected,
-                selectedColor: kPrimaryGreen,
-                labelStyle: TextStyle(
-                  color: isSelected ? Colors.white : Colors.black87,
-                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                ),
-                backgroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  side: BorderSide(
-                    color: isSelected ? kPrimaryGreen : Colors.grey.shade300,
-                  ),
-                ),
-                onSelected: (val) =>
-                    setState(() => _selectedCategory = val ? cat : null),
-              );
-            }).toList(),
-          ),
-          const SizedBox(height: 24),
-
-          // 3. Live Map
-          _buildSectionHeader('3. Live Map Location', Icons.map_rounded),
-          const SizedBox(height: 10),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(16),
-            child: Container(
-              height: 200,
-              decoration: BoxDecoration(
-                border: Border.all(color: kAccentGreen, width: 1.5),
+              gradient: const LinearGradient(
+                colors: [Color(0xFF1B5E20), Color(0xFF43A047)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
               ),
-              child: FlutterMap(
-                options: MapOptions(
-                  initialCenter: _selectedLocation,
-                  initialZoom: 14.0,
-                  onTap: (tapPosition, point) {
-                    HapticFeedback.selectionClick();
-                    setState(() => _selectedLocation = point);
+              borderRadius: BorderRadius.circular(22),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  loc.t('Hello, $name', 'नमस्ते, $name'),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 22,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          _formCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _buildSectionHeader(
+                  loc.t('Photo or video', 'फोटो वा भिडियो'),
+                  Icons.photo_camera_rounded,
+                ),
+                const SizedBox(height: 10),
+                Container(
+                  height: 148,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF7FBF6),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: kAccentGreen),
+                  ),
+                  child: _mediaFile == null
+                      ? Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                          children: [
+                            _buildMediaTile(
+                              icon: Icons.photo_camera_rounded,
+                              label: loc.t('Camera', 'क्यामेरा'),
+                              onTap: () => _pickMedia(ImageSource.camera),
+                            ),
+                            _buildMediaTile(
+                              icon: Icons.videocam_rounded,
+                              label: loc.t('Video', 'भिडियो'),
+                              onTap: () => _pickMedia(
+                                ImageSource.camera,
+                                isVideo: true,
+                              ),
+                            ),
+                            _buildMediaTile(
+                              icon: Icons.collections_rounded,
+                              label: loc.t('Gallery', 'ग्यालेरी'),
+                              onTap: () => _pickMedia(ImageSource.gallery),
+                            ),
+                          ],
+                        )
+                      : Stack(
+                          children: [
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(16),
+                              child: Image.file(
+                                File(_mediaFile!.path),
+                                width: double.infinity,
+                                height: 148,
+                                fit: BoxFit.cover,
+                              ),
+                            ),
+                            Positioned(
+                              top: 8,
+                              right: 8,
+                              child: CircleAvatar(
+                                backgroundColor: Colors.black54,
+                                child: IconButton(
+                                  icon: const Icon(
+                                    Icons.close,
+                                    color: Colors.white,
+                                  ),
+                                  onPressed: () =>
+                                      setState(() => _mediaFile = null),
+                                ),
+                              ),
+                            ),
+                            if (_isVideo)
+                              const Center(
+                                child: Icon(
+                                  Icons.play_circle_fill_rounded,
+                                  color: Colors.white,
+                                  size: 48,
+                                ),
+                              ),
+                          ],
+                        ),
+                ),
+                const SizedBox(height: 16),
+                _buildSectionHeader(
+                  loc.t('Category', 'श्रेणी'),
+                  Icons.category_rounded,
+                ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String>(
+                  initialValue: _selectedCategory,
+                  isExpanded: true,
+                  menuMaxHeight: 280,
+                  decoration: _fieldDecoration(
+                    hint: loc.t('Select issue type', 'समस्याको प्रकार छान्नुहोस्'),
+                  ),
+                  hint: Text(
+                    loc.t('Select issue type', 'समस्याको प्रकार छान्नुहोस्'),
+                  ),
+                  items: _categories
+                      .map(
+                        (cat) => DropdownMenuItem(
+                          value: cat,
+                          child: Text(
+                            loc.category(cat),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (value) =>
+                      setState(() => _selectedCategory = value),
+                ),
+                const SizedBox(height: 16),
+                _buildSectionHeader(
+                  loc.t('Describe it', 'विवरण लेख्नुहोस्'),
+                  Icons.edit_note_rounded,
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _descController,
+                  maxLines: 3,
+                  decoration: _fieldDecoration(
+                    hint: loc.t(
+                      'What happened, and where exactly?',
+                      'के भयो, र कहाँ भयो?',
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          _formCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _buildSectionHeader(
+                  loc.t('Pin the exact spot', 'ठ्याक्कै स्थान पिन गर्नुहोस्'),
+                  Icons.my_location_rounded,
+                ),
+                const SizedBox(height: 10),
+                FilledButton.icon(
+                  onPressed: _locating ? null : _useCurrentLocation,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: kPrimaryGreen,
+                    foregroundColor: Colors.white,
+                    minimumSize: const Size.fromHeight(44),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                  icon: _locating
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Icon(Icons.gps_fixed_rounded),
+                  label: Text(
+                    _locating
+                        ? loc.t('Finding you...', 'तपाईं खोजिँदै...')
+                        : loc.t(
+                            'Use my current location',
+                            'मेरो हालको स्थान प्रयोग गर्नुहोस्',
+                          ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(16),
+                  child: SizedBox(
+                    height: 180,
+                    child: Stack(
+                      children: [
+                        FlutterMap(
+                          mapController: _mapController,
+                          options: MapOptions(
+                            initialCenter: _selectedLocation,
+                            initialZoom: 14.5,
+                            onTap: (tapPosition, point) {
+                              HapticFeedback.selectionClick();
+                              setState(() => _selectedLocation = point);
+                            },
+                          ),
+                          children: [
+                            TileLayer(
+                              urlTemplate:
+                                  'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                              userAgentPackageName: 'app.hamro_fix',
+                            ),
+                            MarkerLayer(
+                              markers: [
+                                Marker(
+                                  point: _selectedLocation,
+                                  width: 48,
+                                  height: 48,
+                                  child: const Icon(
+                                    Icons.location_on_rounded,
+                                    color: Color(0xFFC62828),
+                                    size: 44,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                        Positioned(
+                          left: 10,
+                          right: 10,
+                          bottom: 10,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 8,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.94),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              '${_selectedLocation.latitude.toStringAsFixed(5)}, ${_selectedLocation.longitude.toStringAsFixed(5)}',
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                DropdownButtonFormField<String>(
+                  initialValue: _selectedMunicipality,
+                  isExpanded: true,
+                  decoration: _fieldDecoration(
+                    hint: loc.t('Municipality', 'नगरपालिका'),
+                  ),
+                  items: _municipalities
+                      .map((m) => DropdownMenuItem(value: m, child: Text(m)))
+                      .toList(),
+                  onChanged: (v) {
+                    if (v != null) {
+                      setState(() => _selectedMunicipality = v);
+                    }
                   },
                 ),
-                children: [
-                  TileLayer(
-                    urlTemplate:
-                        'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                    userAgentPackageName: 'com.hamrofix.app',
-                  ),
-                  MarkerLayer(
-                    markers: [
-                      Marker(
-                        point: _selectedLocation,
-                        width: 40,
-                        height: 40,
-                        child: const Icon(
-                          Icons.location_on_rounded,
-                          color: Colors.red,
-                          size: 40,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
+              ],
             ),
           ),
-          const SizedBox(height: 24),
-
-          // 4. Municipality & Details
-          _buildSectionHeader(
-            '4. Local Municipality & Details',
-            Icons.business_rounded,
-          ),
-          const SizedBox(height: 10),
-          DropdownButtonFormField<String>(
-            initialValue: _selectedMunicipality,
-            decoration: InputDecoration(
-              filled: true,
-              fillColor: Colors.white,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(14),
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(14),
-                borderSide: BorderSide(color: Colors.grey.shade300),
-              ),
-            ),
-            items: _municipalities
-                .map((m) => DropdownMenuItem(value: m, child: Text(m)))
-                .toList(),
-            onChanged: (v) {
-              if (v != null) setState(() => _selectedMunicipality = v);
-            },
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _descController,
-            maxLines: 3,
-            decoration: InputDecoration(
-              hintText: 'Describe the problem clearly...',
-              filled: true,
-              fillColor: Colors.white,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(14),
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(14),
-                borderSide: BorderSide(color: Colors.grey.shade300),
-              ),
-            ),
-          ),
-          const SizedBox(height: 28),
-
-          // Submit Button
+          const SizedBox(height: 18),
           FilledButton.icon(
             onPressed: _isSubmitting ? null : _submitReport,
             style: FilledButton.styleFrom(
               backgroundColor: kPrimaryGreen,
-              minimumSize: const Size.fromHeight(54),
+              foregroundColor: Colors.white,
+              minimumSize: const Size.fromHeight(52),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(16),
               ),
@@ -507,13 +595,51 @@ class _InteractiveCreateReportTabState
                       strokeWidth: 2,
                     ),
                   )
-                : const Text(
-                    'SUBMIT REPORT',
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                : Text(
+                    loc.t('Submit report', 'रिपोर्ट पठाउनुहोस्'),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 16,
+                    ),
                   ),
           ),
-          const SizedBox(height: 16),
         ],
+      ),
+    );
+  }
+
+  Widget _formCard({required Widget child}) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: kPrimaryGreen.withValues(alpha: 0.07),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: child,
+    );
+  }
+
+  InputDecoration _fieldDecoration({required String hint, IconData? icon}) {
+    return InputDecoration(
+      hintText: hint,
+      filled: true,
+      fillColor: const Color(0xFFF7FBF6),
+      prefixIcon: icon == null ? null : Icon(icon, color: kPrimaryGreen),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: BorderSide(color: Colors.grey.shade200),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: const BorderSide(color: kPrimaryGreen, width: 1.4),
       ),
     );
   }
@@ -560,231 +686,70 @@ class _InteractiveCreateReportTabState
   }
 }
 
-// -----------------------------------------------------------------------------
-// TikTok-Style Feed
-// -----------------------------------------------------------------------------
-class TikTokReportFeed extends StatelessWidget {
-  final Stream<List<dynamic>> stream;
-  const TikTokReportFeed({super.key, required this.stream});
+class _MyReportsTab extends StatelessWidget {
+  const _MyReportsTab({required this.profile});
+
+  final UserProfile profile;
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<List<dynamic>>(
-      stream: stream,
+    return StreamBuilder<List<ReportIssue>>(
+      stream: ReportService().watchMyReports(profile.uid),
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(
-            child: CircularProgressIndicator(color: kPrimaryGreen),
-          );
+        if (snapshot.hasError) {
+          return Center(child: Text(AuthMessages.from(snapshot.error!)));
         }
-
-        final items = snapshot.data ?? [];
-        if (items.isEmpty) {
+        if (!snapshot.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        final reports = snapshot.data!;
+        if (reports.isEmpty) {
           return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  Icons.video_collection_outlined,
-                  size: 64,
-                  color: Colors.grey.shade400,
-                ),
-                const SizedBox(height: 12),
-                const Text(
-                  'No reports filed yet',
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
-                Text(
-                  'Reports you submit will appear here in video feed.',
-                  style: TextStyle(color: Colors.grey.shade600),
-                ),
-              ],
+            child: Text(
+              LocaleScope.of(context).t(
+                'Your reports and tracking IDs will show up here.',
+                'तपाईंका रिपोर्ट र ट्र्याकिङ आईडी यहाँ देखिन्छन्।',
+              ),
             ),
           );
         }
-
-        return PageView.builder(
-          scrollDirection: Axis.vertical,
-          itemCount: items.length,
+        return ListView.separated(
+          padding: const EdgeInsets.all(16),
+          itemCount: reports.length,
+          separatorBuilder: (_, __) => const SizedBox(height: 10),
           itemBuilder: (context, index) {
-            final report = items[index];
-            return Stack(
-              children: [
-                Container(
-                  color: Colors.black,
-                  child: Center(
-                    child: Icon(
-                      Icons.image_rounded,
-                      size: 100,
-                      color: Colors.white.withValues(alpha: 0.3),
+            final report = reports[index];
+            return Card(
+              elevation: 0,
+              color: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: ListTile(
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) =>
+                          ReportDetailsPage(report: report, profile: profile),
                     ),
-                  ),
+                  );
+                },
+                leading: CircleAvatar(
+                  backgroundImage: StoredImage.provider(report.imageUrl),
+                  child: StoredImage.provider(report.imageUrl) == null
+                      ? const Icon(Icons.receipt_long_outlined)
+                      : null,
                 ),
-                Positioned.fill(
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [
-                          Colors.transparent,
-                          Colors.black.withValues(alpha: 0.85),
-                        ],
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                      ),
-                    ),
-                  ),
+                title: Text(report.publicId),
+                subtitle: Text(
+                  '${AppLocale.instance.category(report.category)} · ${report.status.replaceAll('_', ' ')}',
                 ),
-                Positioned(
-                  left: 16,
-                  right: 80,
-                  bottom: 30,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 4,
-                        ),
-                        decoration: BoxDecoration(
-                          color: kPrimaryGreen,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Text(
-                          report is Map && report.containsKey('category')
-                              ? report['category'].toString()
-                              : 'General',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        report is Map && report.containsKey('title')
-                            ? report['title'].toString()
-                            : 'Public Infrastructure Issue',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 18,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        report is Map && report.containsKey('description')
-                            ? report['description'].toString()
-                            : 'No detailed description provided.',
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.9),
-                          fontSize: 13,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Positioned(
-                  right: 16,
-                  bottom: 40,
-                  child: Column(
-                    children: [
-                      _buildIconButton(Icons.favorite_rounded, '24'),
-                      const SizedBox(height: 18),
-                      _buildIconButton(Icons.comment_rounded, '8'),
-                      const SizedBox(height: 18),
-                      _buildIconButton(Icons.share_rounded, 'Share'),
-                    ],
-                  ),
-                ),
-              ],
+                trailing: const Icon(Icons.chevron_right_rounded),
+              ),
             );
           },
         );
       },
-    );
-  }
-
-  Widget _buildIconButton(IconData icon, String count) {
-    return Column(
-      children: [
-        CircleAvatar(
-          backgroundColor: Colors.black45,
-          radius: 22,
-          child: Icon(icon, color: Colors.white, size: 22),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          count,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 11,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-// -----------------------------------------------------------------------------
-// Notifications Tab Component
-// -----------------------------------------------------------------------------
-class NotificationsTab extends StatelessWidget {
-  const NotificationsTab({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        _buildNotificationCard(
-          title: 'Status Update: Ward #4 Road Repair',
-          subtitle: 'Your report status changed to "In Progress".',
-          time: '2 hours ago',
-          icon: Icons.alt_route_rounded,
-        ),
-        _buildNotificationCard(
-          title: 'Report Verified',
-          subtitle: 'Lalitpur Metropolitan municipality verified your report.',
-          time: '1 day ago',
-          icon: Icons.verified_rounded,
-        ),
-      ],
-    );
-  }
-
-  Widget _buildNotificationCard({
-    required String title,
-    required String subtitle,
-    required String time,
-    required IconData icon,
-  }) {
-    return Card(
-      elevation: 0,
-      margin: const EdgeInsets.only(bottom: 12),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(14),
-        side: BorderSide(color: Colors.grey.shade200),
-      ),
-      child: ListTile(
-        leading: CircleAvatar(
-          backgroundColor: kLightGreenBg,
-          child: Icon(icon, color: kPrimaryGreen),
-        ),
-        title: Text(
-          title,
-          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-        ),
-        subtitle: Text(subtitle, style: const TextStyle(fontSize: 12)),
-        trailing: Text(
-          time,
-          style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
-        ),
-      ),
     );
   }
 }
