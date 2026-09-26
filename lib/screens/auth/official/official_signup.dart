@@ -2,9 +2,13 @@
 // HamroFix - Official Access Request (invite / admin-issued accounts)
 // ============================================================================
 
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 
+import 'package:hamro_fix/core/l10n/app_locale.dart';
 import 'package:hamro_fix/screens/auth/landing_page.dart';
 import 'package:hamro_fix/screens/auth/official/official_login.dart';
 import 'package:hamro_fix/services/auth_messages.dart';
@@ -22,19 +26,29 @@ class _OfficialSignupPageState extends State<OfficialSignupPage> {
 
   final _fullNameController = TextEditingController();
   final _emailController = TextEditingController();
+  final _phoneController = TextEditingController();
   final _employeeIdController = TextEditingController();
-  final _passwordController = TextEditingController();
+  final _departmentController = TextEditingController();
+  final _municipalityController = TextEditingController();
 
   bool _isEnglish = true;
-  bool _obscurePassword = true;
   bool _isLoading = false;
+  XFile? _profileImage;
+
+  @override
+  void initState() {
+    super.initState();
+    _isEnglish = AppLocale.instance.isEnglish;
+  }
 
   @override
   void dispose() {
     _fullNameController.dispose();
     _emailController.dispose();
+    _phoneController.dispose();
     _employeeIdController.dispose();
-    _passwordController.dispose();
+    _departmentController.dispose();
+    _municipalityController.dispose();
     super.dispose();
   }
 
@@ -73,23 +87,24 @@ class _OfficialSignupPageState extends State<OfficialSignupPage> {
     return null;
   }
 
+  String? _validatePhone(String? v) {
+    final digits = (v ?? '').replaceAll(RegExp(r'\D'), '');
+    if (digits.isEmpty) {
+      return _isEnglish ? 'Mobile number is required' : 'मोबाइल नम्बर आवश्यक छ';
+    }
+    if (digits.length < 10) {
+      return _isEnglish
+          ? 'Enter a valid 10-digit mobile number'
+          : 'मान्य १० अङ्कको मोबाइल नम्बर लेख्नुहोस्';
+    }
+    return null;
+  }
+
   String? _validateEmployeeId(String? v) {
     if (v == null || v.trim().isEmpty) {
       return _isEnglish
           ? 'Employee/Department ID is required'
           : 'कर्मचारी/शाखा आईडी आवश्यक छ';
-    }
-    return null;
-  }
-
-  String? _validatePassword(String? v) {
-    if (v == null || v.isEmpty) {
-      return _isEnglish ? 'Password is required' : 'पासवर्ड आवश्यक छ';
-    }
-    if (v.length < 8) {
-      return _isEnglish
-          ? 'Minimum 8 characters required'
-          : 'कम्तीमा ८ अक्षर चाहिन्छ';
     }
     return null;
   }
@@ -106,14 +121,26 @@ class _OfficialSignupPageState extends State<OfficialSignupPage> {
       );
       return;
     }
+    if (_profileImage == null) {
+      _showSnack(
+        _isEnglish
+            ? 'Please upload your profile photo for verification'
+            : 'प्रमाणीकरणका लागि प्रोफाइल तस्बिर हाल्नुहोस्',
+        isError: true,
+      );
+      return;
+    }
 
     setState(() => _isLoading = true);
     try {
       await AuthServices().requestOfficialAccess(
         fullName: _fullNameController.text,
         email: _emailController.text,
+        phone: _phoneController.text,
         employeeId: _employeeIdController.text,
-        password: _passwordController.text,
+        department: _departmentController.text.trim(),
+        municipality: _municipalityController.text.trim(),
+        profileImage: _profileImage,
       );
     } catch (e) {
       if (!mounted) return;
@@ -259,7 +286,10 @@ class _OfficialSignupPageState extends State<OfficialSignupPage> {
             child: TextButton.icon(
               onPressed: () {
                 HapticFeedback.selectionClick();
-                setState(() => _isEnglish = !_isEnglish);
+                setState(() {
+                  _isEnglish = !_isEnglish;
+                  AppLocale.instance.setEnglish(_isEnglish);
+                });
               },
               icon: const Icon(Icons.language_rounded, size: 18),
               label: Text(
@@ -399,6 +429,44 @@ class _OfficialSignupPageState extends State<OfficialSignupPage> {
                   ),
                 ),
                 _sectionHeader('Official Details', 'आधिकारिक विवरणहरू'),
+                Center(
+                  child: GestureDetector(
+                    onTap: () async {
+                      final file = await ImagePicker().pickImage(
+                        source: ImageSource.gallery,
+                        imageQuality: 80,
+                      );
+                      if (file != null) setState(() => _profileImage = file);
+                    },
+                    child: CircleAvatar(
+                      radius: 46,
+                      backgroundColor: const Color(0xFFE8F5E9),
+                      backgroundImage: _profileImage == null
+                          ? null
+                          : FileImage(File(_profileImage!.path)),
+                      child: _profileImage == null
+                          ? const Icon(
+                              Icons.camera_alt_outlined,
+                              color: Color(0xFF2E7D32),
+                              size: 28,
+                            )
+                          : null,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Center(
+                  child: Text(
+                    _isEnglish
+                        ? 'Upload profile photo (required)'
+                        : 'प्रोफाइल तस्बिर हाल्नुहोस् (आवश्यक)',
+                    style: const TextStyle(
+                      color: Color(0xFF2E7D32),
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
                 TextFormField(
                   controller: _fullNameController,
                   textCapitalization: TextCapitalization.words,
@@ -426,6 +494,17 @@ class _OfficialSignupPageState extends State<OfficialSignupPage> {
                 ),
                 const SizedBox(height: 12),
                 TextFormField(
+                  controller: _phoneController,
+                  keyboardType: TextInputType.phone,
+                  validator: _validatePhone,
+                  decoration: _inputDecoration(
+                    label: _isEnglish ? 'Mobile number' : 'मोबाइल नम्बर',
+                    hint: '98XXXXXXXX',
+                    icon: Icons.phone_outlined,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
                   controller: _employeeIdController,
                   validator: _validateEmployeeId,
                   decoration: _inputDecoration(
@@ -438,23 +517,33 @@ class _OfficialSignupPageState extends State<OfficialSignupPage> {
                 ),
                 const SizedBox(height: 12),
                 TextFormField(
-                  controller: _passwordController,
-                  obscureText: _obscurePassword,
-                  validator: _validatePassword,
+                  controller: _departmentController,
+                  textCapitalization: TextCapitalization.words,
                   decoration: _inputDecoration(
-                    label: _isEnglish ? 'Password' : 'पासवर्ड',
-                    hint: '••••••••',
-                    icon: Icons.lock_outline_rounded,
-                    suffixIcon: IconButton(
-                      icon: Icon(
-                        _obscurePassword
-                            ? Icons.visibility_off_outlined
-                            : Icons.visibility_outlined,
-                        color: Colors.grey.shade600,
-                      ),
-                      onPressed: () =>
-                          setState(() => _obscurePassword = !_obscurePassword),
-                    ),
+                    label: _isEnglish
+                        ? 'Department / ward office'
+                        : 'शाखा / वडा कार्यालय',
+                    hint: _isEnglish ? 'Ward 5 office' : 'वडा ५ कार्यालय',
+                    icon: Icons.apartment_outlined,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _municipalityController,
+                  textCapitalization: TextCapitalization.words,
+                  decoration: _inputDecoration(
+                    label: _isEnglish ? 'Municipality' : 'नगरपालिका',
+                    hint: _isEnglish
+                        ? 'Kathmandu Metropolitan'
+                        : 'काठमाडौं महानगरपालिका',
+                    icon: Icons.location_city_outlined,
+                  ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.only(top: 12, bottom: 8),
+                  child: Text(
+                    'No password is needed here. After an admin approves your request, you will receive an email to set your password.',
+                    style: TextStyle(fontSize: 13),
                   ),
                 ),
                 const SizedBox(height: 24),
