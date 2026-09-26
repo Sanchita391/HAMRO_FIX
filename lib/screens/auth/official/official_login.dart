@@ -6,6 +6,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'package:hamro_fix/core/l10n/app_locale.dart';
 import 'package:hamro_fix/screens/auth/landing_page.dart';
 import 'package:hamro_fix/screens/auth/official/official_signup.dart';
 import 'package:hamro_fix/models/public_model.dart';
@@ -29,6 +30,12 @@ class _OfficialLoginPageState extends State<OfficialLoginPage> {
   bool _isEnglish = true;
   bool _obscurePassword = true;
   bool _isLoading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _isEnglish = AppLocale.instance.isEnglish;
+  }
 
   @override
   void dispose() {
@@ -64,22 +71,17 @@ class _OfficialLoginPageState extends State<OfficialLoginPage> {
   }
 
   String? _validateEmployeeId(String? v) {
-    if (v == null || v.trim().isEmpty) {
-      return _isEnglish
-          ? 'Employee/Department ID is required'
-          : 'कर्मचारी/शाखा आईडी आवश्यक छ';
-    }
     return null;
   }
 
   String? _validatePassword(String? v) {
-    if (v == null || v.isEmpty) {
+    if (v == null || v.trim().isEmpty) {
       return _isEnglish ? 'Password is required' : 'पासवर्ड आवश्यक छ';
     }
-    if (v.length < 8) {
+    if (v.trim().length < 6) {
       return _isEnglish
-          ? 'Minimum 8 characters required'
-          : 'कम्तीमा ८ अक्षर चाहिन्छ';
+          ? 'Password must be at least 6 characters'
+          : 'पासवर्ड कम्तीमा ६ अक्षरको हुनुपर्छ';
     }
     return null;
   }
@@ -101,9 +103,8 @@ class _OfficialLoginPageState extends State<OfficialLoginPage> {
     try {
       await AuthServices().loginWithEmail(
         email: _emailController.text,
-        password: _passwordController.text,
+        password: _passwordController.text.trim(),
         expectedRole: UserRole.official,
-        employeeId: _employeeIdController.text,
       );
     } catch (e) {
       if (!mounted) return;
@@ -113,6 +114,7 @@ class _OfficialLoginPageState extends State<OfficialLoginPage> {
     }
     if (!mounted) return;
     setState(() => _isLoading = false);
+    Navigator.of(context).popUntil((route) => route.isFirst);
   }
 
   void _showSnack(String msg, {bool isError = false}) {
@@ -236,7 +238,10 @@ class _OfficialLoginPageState extends State<OfficialLoginPage> {
             child: TextButton.icon(
               onPressed: () {
                 HapticFeedback.selectionClick();
-                setState(() => _isEnglish = !_isEnglish);
+                setState(() {
+                  _isEnglish = !_isEnglish;
+                  AppLocale.instance.setEnglish(_isEnglish);
+                });
               },
               icon: const Icon(Icons.language_rounded, size: 18),
               label: Text(
@@ -394,8 +399,8 @@ class _OfficialLoginPageState extends State<OfficialLoginPage> {
                   validator: _validateEmployeeId,
                   decoration: _inputDecoration(
                     label: _isEnglish
-                        ? 'Employee/Department ID'
-                        : 'कर्मचारी/शाखा आईडी',
+                        ? 'Employee ID (optional)'
+                        : 'कर्मचारी आईडी (ऐच्छिक)',
                     hint: 'EMP-102938',
                     icon: Icons.badge_outlined,
                   ),
@@ -452,7 +457,39 @@ class _OfficialLoginPageState extends State<OfficialLoginPage> {
                           ),
                   ),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 8),
+                TextButton(
+                  onPressed: _isLoading
+                      ? null
+                      : () async {
+                          final email = _emailController.text.trim();
+                          if (email.isEmpty) {
+                            _showSnack(
+                              _isEnglish
+                                  ? 'Enter your official email first'
+                                  : 'पहिले आधिकारिक इमेल लेख्नुहोस्',
+                              isError: true,
+                            );
+                            return;
+                          }
+                          try {
+                            await AuthServices().sendStaffLoginEmail(email);
+                            if (!mounted) return;
+                            _showSnack(
+                              _isEnglish
+                                  ? 'Password reset email sent. Set a new password, then sign in.'
+                                  : 'पासवर्ड रिसेट इमेल पठाइयो।',
+                            );
+                          } catch (e) {
+                            if (!mounted) return;
+                            _showSnack(AuthMessages.from(e), isError: true);
+                          }
+                        },
+                  child: Text(
+                    _isEnglish ? 'Forgot password? Email a reset link' : 'पासवर्ड बिर्सनुभयो?',
+                  ),
+                ),
+                const SizedBox(height: 8),
                 Text(
                   _isEnglish
                       ? 'Official accounts are issued by municipality administrators. Use Request Access if you need credentials.'
