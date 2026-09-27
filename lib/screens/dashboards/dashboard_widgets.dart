@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 
+import 'package:hamro_fix/core/l10n/app_locale.dart';
 import 'package:hamro_fix/models/public_model.dart';
+import 'package:hamro_fix/screens/reports/report_details_page.dart';
+import 'package:hamro_fix/widgets/stored_image.dart';
 import 'package:hamro_fix/services/auth_messages.dart';
 import 'package:hamro_fix/services/auth_services.dart';
 import 'package:hamro_fix/services/report_service.dart';
@@ -19,6 +22,7 @@ class DashboardShell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    LocaleScope.of(context);
     return DefaultTabController(
       length: tabs.length,
       child: Scaffold(
@@ -35,11 +39,10 @@ class DashboardShell extends StatelessWidget {
             ),
           ),
           actions: [
+            const LanguageToggle(),
             IconButton(
-              tooltip: 'Log out',
-              onPressed: () async {
-                await AuthServices().signOut();
-              },
+              tooltip: AppLocale.instance.t('Log out', 'लग आउट'),
+              onPressed: () => confirmAndLogout(context),
               icon: const Icon(Icons.logout_rounded, color: Color(0xFF2E7D32)),
             ),
           ],
@@ -63,6 +66,101 @@ class DashboardTab {
   final Widget child;
 }
 
+Future<void> confirmAndLogout(BuildContext context) async {
+  final loc = AppLocale.instance;
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: Text(loc.t('Log out?', 'लग आउट गर्ने हो?')),
+      content: Text(
+        loc.t(
+          'Are you sure you want to log out from HamroFix?',
+          'के तपाईं हाम्रो फिक्सबाट लग आउट गर्न चाहनुहुन्छ?',
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: Text(loc.t('Stay', 'बस्नुहोस्')),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: Text(loc.t('Log out', 'लग आउट')),
+        ),
+      ],
+    ),
+  );
+  if (ok == true) await AuthServices().signOut();
+}
+
+class HamroFixBarTitle extends StatelessWidget {
+  const HamroFixBarTitle({
+    super.key,
+    required this.subtitle,
+    this.title = 'HamroFix',
+  });
+
+  final String title;
+  final String subtitle;
+
+  @override
+  Widget build(BuildContext context) {
+    LocaleScope.of(context);
+    return Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(6),
+          decoration: BoxDecoration(
+            color: const Color(0xFFE8F5E9),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: const Color(0xFFA5D6A7)),
+          ),
+          child: Image.asset(
+            'assets/images/logo.png',
+            width: 28,
+            height: 28,
+            fit: BoxFit.contain,
+            errorBuilder: (_, __, ___) => const Icon(
+              Icons.shield_outlined,
+              size: 22,
+              color: Color(0xFF2E7D32),
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                title,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 18,
+                  color: Colors.black87,
+                  letterSpacing: -0.3,
+                ),
+              ),
+              Text(
+                subtitle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                  color: Colors.black54,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const LanguageToggle(),
+      ],
+    );
+  }
+}
+
 class ProfileTab extends StatefulWidget {
   const ProfileTab({super.key, required this.profile});
 
@@ -75,6 +173,7 @@ class ProfileTab extends StatefulWidget {
 class _ProfileTabState extends State<ProfileTab> {
   late final TextEditingController _name;
   late final TextEditingController _phone;
+  late final TextEditingController _username;
   bool _saving = false;
 
   @override
@@ -84,12 +183,14 @@ class _ProfileTabState extends State<ProfileTab> {
     _phone = TextEditingController(
       text: widget.profile.phone.replaceFirst('+977', ''),
     );
+    _username = TextEditingController(text: widget.profile.username ?? '');
   }
 
   @override
   void dispose() {
     _name.dispose();
     _phone.dispose();
+    _username.dispose();
     super.dispose();
   }
 
@@ -101,15 +202,19 @@ class _ProfileTabState extends State<ProfileTab> {
         name: _name.text,
         phone: _phone.text,
       );
+      if (widget.profile.normalizedRole == UserRole.admin &&
+          _username.text.trim().isNotEmpty) {
+        await AuthServices().saveAdminUsername(_username.text);
+      }
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Profile updated.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Profile updated.')));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(AuthMessages.from(e))),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(AuthMessages.from(e))));
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -117,32 +222,253 @@ class _ProfileTabState extends State<ProfileTab> {
 
   @override
   Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.all(20),
+    LocaleScope.of(context);
+    final media = MediaQuery.of(context);
+    return MediaQuery(
+      data: media.copyWith(
+        textScaler: media.textScaler.clamp(minScaleFactor: 0.9, maxScaleFactor: 1.1),
+      ),
+      child: ListView(
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
       children: [
-        Text('Role: ${widget.profile.normalizedRole ?? 'unknown'}'),
+        Text(
+          AppLocale.instance.t(
+            'Role: ${widget.profile.normalizedRole ?? 'unknown'}',
+            'भूमिका: ${widget.profile.normalizedRole ?? 'unknown'}',
+          ),
+          style: const TextStyle(fontSize: 13, color: Colors.black54),
+        ),
+        const SizedBox(height: 12),
+        Center(
+          child: ClipOval(
+            child: SizedBox(
+              width: 72,
+              height: 72,
+              child: StoredImage.provider(widget.profile.profileImageUrl) == null
+                  ? ColoredBox(
+                      color: const Color(0xFFE8F5E9),
+                      child: Center(
+                        child: Text(
+                          widget.profile.name.isEmpty
+                              ? '?'
+                              : widget.profile.name[0].toUpperCase(),
+                          style: const TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w800,
+                            color: Color(0xFF2E7D32),
+                          ),
+                        ),
+                      ),
+                    )
+                  : StoredImage(
+                      widget.profile.profileImageUrl,
+                      width: 72,
+                      height: 72,
+                      fit: BoxFit.cover,
+                    ),
+            ),
+          ),
+        ),
         const SizedBox(height: 8),
-        Text('Email: ${widget.profile.email}'),
-        const SizedBox(height: 16),
+        if (!widget.profile.hideContactEmail) ...[
+          Text(
+            AppLocale.instance.t(
+              'Email: ${widget.profile.email}',
+              'इमेल: ${widget.profile.email}',
+            ),
+          ),
+          const SizedBox(height: 16),
+        ],
         TextField(
           controller: _name,
-          decoration: const InputDecoration(labelText: 'Name'),
+          decoration: InputDecoration(
+            labelText: AppLocale.instance.t('Name', 'नाम'),
+          ),
         ),
         const SizedBox(height: 12),
         TextField(
           controller: _phone,
-          decoration: const InputDecoration(
-            labelText: 'Mobile Number',
+          decoration: InputDecoration(
+            labelText: AppLocale.instance.t('Mobile Number', 'मोबाइल नम्बर'),
             prefixText: '+977 ',
           ),
         ),
+        if (widget.profile.normalizedRole == UserRole.admin) ...[
+          const SizedBox(height: 12),
+          TextField(
+            controller: _username,
+            decoration: const InputDecoration(
+              labelText: 'Login username',
+              hintText: 'admin',
+              helperText:
+                  'After saving, you can sign in with this username instead of email.',
+            ),
+          ),
+        ],
         const SizedBox(height: 20),
         FilledButton(
           onPressed: _saving ? null : _save,
-          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF2E7D32)),
-          child: Text(_saving ? 'Saving...' : 'Save profile'),
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xFF2E7D32),
+            foregroundColor: Colors.white,
+          ),
+          child: Text(
+            _saving
+                ? AppLocale.instance.t('Saving...', 'सेभ हुँदै...')
+                : AppLocale.instance.t('Save profile', 'प्रोफाइल सेभ गर्नुहोस्'),
+          ),
+        ),
+        const SizedBox(height: 28),
+        Text(
+          AppLocale.instance.t('Change password', 'पासवर्ड परिवर्तन'),
+          style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+        ),
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          onPressed: () {
+            Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => ChangePasswordPage(profile: widget.profile),
+              ),
+            );
+          },
+          icon: const Icon(Icons.lock_reset_rounded),
+          label: Text(AppLocale.instance.t('Change password', 'पासवर्ड परिवर्तन')),
         ),
       ],
+      ),
+    );
+  }
+}
+
+class ChangePasswordPage extends StatefulWidget {
+  const ChangePasswordPage({super.key, required this.profile});
+
+  final UserProfile profile;
+
+  @override
+  State<ChangePasswordPage> createState() => _ChangePasswordPageState();
+}
+
+class _ChangePasswordPageState extends State<ChangePasswordPage> {
+  final _currentPassword = TextEditingController();
+  final _newPassword = TextEditingController();
+  final _confirmPassword = TextEditingController();
+  bool _changingPassword = false;
+  bool _obscureCurrent = true;
+  bool _obscureNew = true;
+
+  @override
+  void dispose() {
+    _currentPassword.dispose();
+    _newPassword.dispose();
+    _confirmPassword.dispose();
+    super.dispose();
+  }
+
+  Future<void> _changePassword() async {
+    if (_currentPassword.text.isEmpty || _newPassword.text.length < 6) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Enter your current password and a new password of at least 6 characters.',
+          ),
+        ),
+      );
+      return;
+    }
+    if (_newPassword.text != _confirmPassword.text) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('New passwords do not match.')),
+      );
+      return;
+    }
+    setState(() => _changingPassword = true);
+    try {
+      await AuthServices().changePassword(
+        currentPassword: _currentPassword.text,
+        newPassword: _newPassword.text,
+      );
+      _currentPassword.clear();
+      _newPassword.clear();
+      _confirmPassword.clear();
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Password updated.')));
+      Navigator.of(context).pop();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(AuthMessages.from(e))));
+    } finally {
+      if (mounted) setState(() => _changingPassword = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF6FBF6),
+      appBar: AppBar(title: const Text('Change password')),
+      body: ListView(
+        padding: const EdgeInsets.all(20),
+        children: [
+          if (!widget.profile.hideContactEmail) ...[
+            Text(
+              widget.profile.email,
+              style: const TextStyle(color: Colors.black54),
+            ),
+            const SizedBox(height: 16),
+          ],
+          TextField(
+            controller: _currentPassword,
+            obscureText: _obscureCurrent,
+            decoration: InputDecoration(
+              labelText: 'Current password',
+              suffixIcon: IconButton(
+                onPressed: () =>
+                    setState(() => _obscureCurrent = !_obscureCurrent),
+                icon: Icon(
+                  _obscureCurrent
+                      ? Icons.visibility_off_outlined
+                      : Icons.visibility_outlined,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _newPassword,
+            obscureText: _obscureNew,
+            decoration: InputDecoration(
+              labelText: 'New password',
+              suffixIcon: IconButton(
+                onPressed: () => setState(() => _obscureNew = !_obscureNew),
+                icon: Icon(
+                  _obscureNew
+                      ? Icons.visibility_off_outlined
+                      : Icons.visibility_outlined,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _confirmPassword,
+            obscureText: true,
+            decoration: const InputDecoration(
+              labelText: 'Confirm new password',
+            ),
+          ),
+          const SizedBox(height: 20),
+          FilledButton(
+            onPressed: _changingPassword ? null : _changePassword,
+            child: Text(_changingPassword ? 'Updating...' : 'Update password'),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -151,6 +477,7 @@ class ReportList extends StatelessWidget {
   const ReportList({
     super.key,
     required this.stream,
+    required this.profile,
     this.onAccept,
     this.onReject,
     this.onDuplicate,
@@ -160,6 +487,7 @@ class ReportList extends StatelessWidget {
   });
 
   final Stream<List<ReportIssue>> stream;
+  final UserProfile profile;
   final Future<void> Function(ReportIssue report)? onAccept;
   final Future<void> Function(ReportIssue report)? onReject;
   final Future<void> Function(ReportIssue report)? onDuplicate;
@@ -189,61 +517,71 @@ class ReportList extends StatelessWidget {
           itemBuilder: (context, index) {
             final report = reports[index];
             return Card(
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      report.title,
-                      style: const TextStyle(fontWeight: FontWeight.w700),
+              child: InkWell(
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) =>
+                          ReportDetailsPage(report: report, profile: profile),
                     ),
-                    Text(report.description),
-                    const SizedBox(height: 6),
-                    Text('Status: ${report.status}'),
-                    if (report.assignedWorkerName != null)
-                      Text('Worker: ${report.assignedWorkerName}'),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 8,
-                      children: [
-                        if (onAccept != null)
-                          TextButton(
-                            onPressed: () => onAccept!(report),
-                            child: const Text('Accept'),
-                          ),
-                        if (onReject != null)
-                          TextButton(
-                            onPressed: () => onReject!(report),
-                            child: const Text('Reject'),
-                          ),
-                        if (onDuplicate != null)
-                          TextButton(
-                            onPressed: () => onDuplicate!(report),
-                            child: const Text('Duplicate'),
-                          ),
-                        if (onComplete != null)
-                          TextButton(
-                            onPressed: () => onComplete!(report),
-                            child: const Text('Complete'),
-                          ),
-                        if (onAssign != null && workers.isNotEmpty)
-                          DropdownButton<UserProfile>(
-                            hint: const Text('Assign worker'),
-                            items: [
-                              for (final worker in workers)
-                                DropdownMenuItem(
-                                  value: worker,
-                                  child: Text(worker.name),
-                                ),
-                            ],
-                            onChanged: (worker) {
-                              if (worker != null) onAssign!(report, worker);
-                            },
-                          ),
-                      ],
-                    ),
-                  ],
+                  );
+                },
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        report.title,
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      Text(report.description),
+                      const SizedBox(height: 6),
+                      Text('Status: ${report.status}'),
+                      if (report.crewLabel.isNotEmpty)
+                        Text('Workers: ${report.crewLabel}'),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        children: [
+                          if (onAccept != null)
+                            TextButton(
+                              onPressed: () => onAccept!(report),
+                              child: const Text('Accept'),
+                            ),
+                          if (onReject != null)
+                            TextButton(
+                              onPressed: () => onReject!(report),
+                              child: const Text('Reject'),
+                            ),
+                          if (onDuplicate != null)
+                            TextButton(
+                              onPressed: () => onDuplicate!(report),
+                              child: const Text('Duplicate'),
+                            ),
+                          if (onComplete != null)
+                            TextButton(
+                              onPressed: () => onComplete!(report),
+                              child: const Text('Complete'),
+                            ),
+                          if (onAssign != null && workers.isNotEmpty)
+                            DropdownButton<UserProfile>(
+                              hint: const Text('Assign worker'),
+                              items: [
+                                for (final worker in workers)
+                                  DropdownMenuItem(
+                                    value: worker,
+                                    child: Text(worker.name),
+                                  ),
+                              ],
+                              onChanged: (worker) {
+                                if (worker != null) onAssign!(report, worker);
+                              },
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
               ),
             );
@@ -291,14 +629,14 @@ class _CreateReportTabState extends State<CreateReportTab> {
       if (!mounted) return;
       _title.clear();
       _description.clear();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Report submitted.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Report submitted.')));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(AuthMessages.from(e))),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(AuthMessages.from(e))));
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -334,7 +672,10 @@ class _CreateReportTabState extends State<CreateReportTab> {
         const SizedBox(height: 20),
         FilledButton(
           onPressed: _saving ? null : _submit,
-          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF2E7D32)),
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xFF2E7D32),
+            foregroundColor: Colors.white,
+          ),
           child: Text(_saving ? 'Submitting...' : 'Submit report'),
         ),
       ],
