@@ -1,42 +1,53 @@
-import 'dart:typed_data';
+import 'dart:convert';
+import 'dart:ui' as ui;
 
-import 'package:firebase_storage/firebase_storage.dart';
 import 'package:image_picker/image_picker.dart';
 
+/// Stores photos inside Firestore as compressed data URIs.
+/// Firebase Storage is not used.
 class StorageService {
-  StorageService({FirebaseStorage? storage})
-    : _storage = storage ?? FirebaseStorage.instance;
-
-  final FirebaseStorage _storage;
-
   Future<String> uploadXFile({
     required String path,
     required XFile file,
   }) async {
-    final bytes = await file.readAsBytes();
-    return uploadBytes(path: path, bytes: bytes, contentType: _contentType(file));
+    final encoded = await encodeImage(file);
+    if (encoded == null) {
+      throw const FormatException('This photo is too large to save in Firestore.');
+    }
+    return encoded;
   }
 
-  Future<String> uploadBytes({
-    required String path,
-    required List<int> bytes,
-    String contentType = 'image/jpeg',
+  Future<String?> encodeImage(
+    XFile file, {
+    int maxWidth = 480,
+    int maxBytes = 350000,
   }) async {
-    final ref = _storage.ref(path);
-    await ref.putData(
-      Uint8List.fromList(bytes),
-      SettableMetadata(contentType: contentType),
-    );
-    return ref.getDownloadURL();
-  }
-
-  String _contentType(XFile file) {
-    final mime = file.mimeType;
-    if (mime != null && mime.isNotEmpty) return mime;
     final name = file.name.toLowerCase();
-    if (name.endsWith('.png')) return 'image/png';
-    if (name.endsWith('.webp')) return 'image/webp';
-    if (name.endsWith('.mp4')) return 'video/mp4';
-    return 'image/jpeg';
+    final mime = (file.mimeType ?? '').toLowerCase();
+    if (name.endsWith('.mp4') ||
+        name.endsWith('.mov') ||
+        mime.startsWith('video/')) {
+      return null;
+    }
+
+    var width = maxWidth;
+    while (width >= 120) {
+      final bytes = await file.readAsBytes();
+      final codec = await ui.instantiateImageCodec(
+        bytes,
+        targetWidth: width,
+      );
+      final frame = await codec.getNextFrame();
+      final png = await frame.image.toByteData(format: ui.ImageByteFormat.png);
+      frame.image.dispose();
+      codec.dispose();
+      if (png == null) return null;
+      final data = png.buffer.asUint8List();
+      if (data.length <= maxBytes) {
+        return 'data:image/png;base64,${base64Encode(data)}';
+      }
+      width = (width * 0.65).round();
+    }
+    return null;
   }
 }
