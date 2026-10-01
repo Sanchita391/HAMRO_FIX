@@ -1,9 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'package:hamro_fix/core/l10n/app_locale.dart';
+import 'package:hamro_fix/core/platform/app_target.dart';
+import 'package:hamro_fix/models/public_model.dart';
 import 'package:hamro_fix/screens/auth/landing_page.dart';
-
+import 'package:hamro_fix/screens/auth/use_correct_app_page.dart';
 import 'package:hamro_fix/screens/auth/public/public_signup.dart';
+import 'package:hamro_fix/services/auth_messages.dart';
+import 'package:hamro_fix/services/auth_services.dart';
 
 class PublicLoginPage extends StatefulWidget {
   const PublicLoginPage({super.key});
@@ -21,6 +26,12 @@ class _PublicLoginPageState extends State<PublicLoginPage> {
   bool _obscurePassword = true;
   bool _usePhone = false;
   bool _isLoading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _isEnglish = AppLocale.instance.isEnglish;
+  }
 
   @override
   void dispose() {
@@ -83,26 +94,42 @@ class _PublicLoginPageState extends State<PublicLoginPage> {
     if (!_formKey.currentState!.validate()) return;
 
     setState(() => _isLoading = true);
+    final auth = AuthServices();
 
-    // Simulate authentication call
-    await Future<void>.delayed(const Duration(milliseconds: 700));
-    if (!mounted) return;
+    try {
+      if (_usePhone) {
+        await auth.loginWithPhone(
+          phone: _identifierController.text.trim(),
+          password: _passwordController.text.trim(),
+          expectedRole: UserRole.public,
+        );
+      } else {
+        await auth.loginCitizen(
+          email: _identifierController.text.trim(),
+          password: _passwordController.text.trim(),
+        );
+      }
 
-    setState(() => _isLoading = false);
+      if (!mounted) return;
+      setState(() => _isLoading = false);
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          _isEnglish
-              ? 'Login successful! Welcome to HamroFix.'
-              : 'लगइन सफल भयो! हाम्रोफिक्समा स्वागत छ।',
+      // Pop back to root route so AuthGate can stream user state and show Dashboard
+      Navigator.of(context).popUntil((route) => route.isFirst);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(AuthMessages.from(e)),
+          backgroundColor: const Color(0xFFB71C1C),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          margin: const EdgeInsets.all(16),
         ),
-        backgroundColor: const Color(0xFF1B5E20),
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        margin: const EdgeInsets.all(16),
-      ),
-    );
+      );
+    }
   }
 
   void _handleForgotPassword() {
@@ -119,7 +146,12 @@ class _PublicLoginPageState extends State<PublicLoginPage> {
 
   @override
   Widget build(BuildContext context) {
-    // Wrapped in the app-wide Light Green Theme (guarantees zero purple)
+    if (AppTarget.isWeb) {
+      return const LoginPlatformGuard(
+        staffWebPage: false,
+        child: SizedBox.shrink(),
+      );
+    }
     return Theme(
       data: kHamroFixLightGreenTheme,
       child: Builder(
@@ -141,32 +173,33 @@ class _PublicLoginPageState extends State<PublicLoginPage> {
                 onPressed: _navigateBackToLanding,
               ),
               title: Text(
-                _isEnglish ? 'Citizen Login' : 'नागरिक लगइन',
+                _isEnglish ? 'Public Login' : 'सार्वजनिक लगइन',
                 style: theme.textTheme.titleMedium?.copyWith(
                   fontWeight: FontWeight.w700,
                   color: colorScheme.onSurface,
                 ),
               ),
               actions: [
-                // Top language switch chip
                 Padding(
                   padding: const EdgeInsets.only(right: 14),
-                  child: TextButton.icon(
+                  child: TextButton(
                     onPressed: () {
                       HapticFeedback.selectionClick();
-                      setState(() => _isEnglish = !_isEnglish);
+                      setState(() {
+                        _isEnglish = !_isEnglish;
+                        AppLocale.instance.setEnglish(_isEnglish);
+                      });
                     },
-                    icon: const Icon(Icons.language_rounded, size: 18),
-                    label: Text(
+                    style: TextButton.styleFrom(
+                      foregroundColor: colorScheme.primary,
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    child: Text(
                       _isEnglish ? 'नेपाली' : 'English',
                       style: const TextStyle(
                         fontWeight: FontWeight.bold,
                         fontSize: 13,
                       ),
-                    ),
-                    style: TextButton.styleFrom(
-                      foregroundColor: colorScheme.primary,
-                      visualDensity: VisualDensity.compact,
                     ),
                   ),
                 ),
@@ -180,7 +213,6 @@ class _PublicLoginPageState extends State<PublicLoginPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      // Header Logo & Branding
                       Center(
                         child: Column(
                           children: [
@@ -208,7 +240,7 @@ class _PublicLoginPageState extends State<PublicLoginPage> {
                             const SizedBox(height: 4),
                             Text(
                               _isEnglish
-                                  ? 'Public Citizen Problem Reporting'
+                                  ? 'Public problem reporting'
                                   : 'सार्वजनिक नागरिक समस्या रिपोर्टिङ पोर्टल',
                               style: theme.textTheme.bodySmall?.copyWith(
                                 color: colorScheme.onSurfaceVariant,
@@ -219,7 +251,6 @@ class _PublicLoginPageState extends State<PublicLoginPage> {
                       ),
                       const SizedBox(height: 24),
 
-                      // Auth Navigation Pill (Login vs Sign Up)
                       Container(
                         decoration: BoxDecoration(
                           color: colorScheme.surfaceContainerLow,
@@ -294,7 +325,6 @@ class _PublicLoginPageState extends State<PublicLoginPage> {
                       ),
                       const SizedBox(height: 24),
 
-                      // Method Selector (Email vs Phone)
                       SegmentedButton<bool>(
                         segments: [
                           ButtonSegment<bool>(
@@ -324,7 +354,6 @@ class _PublicLoginPageState extends State<PublicLoginPage> {
                       ),
                       const SizedBox(height: 18),
 
-                      // Identifier Input (Email or Mobile)
                       TextFormField(
                         key: ValueKey(_usePhone),
                         controller: _identifierController,
@@ -344,7 +373,7 @@ class _PublicLoginPageState extends State<PublicLoginPage> {
                               : (_isEnglish ? 'Email Address' : 'इमेल ठेगाना'),
                           hintText: _usePhone
                               ? '98XXXXXXXX'
-                              : 'citizen@example.com',
+                              : 'public@example.com',
                           prefixIcon: Icon(
                             _usePhone
                                 ? Icons.phone_android_rounded
@@ -383,7 +412,6 @@ class _PublicLoginPageState extends State<PublicLoginPage> {
                       ),
                       const SizedBox(height: 14),
 
-                      // Password Field
                       TextFormField(
                         controller: _passwordController,
                         obscureText: _obscurePassword,
@@ -433,7 +461,6 @@ class _PublicLoginPageState extends State<PublicLoginPage> {
                       ),
                       const SizedBox(height: 8),
 
-                      // Forgot Password Link
                       Align(
                         alignment: Alignment.centerRight,
                         child: TextButton(
@@ -458,7 +485,6 @@ class _PublicLoginPageState extends State<PublicLoginPage> {
                       ),
                       const SizedBox(height: 18),
 
-                      // Submit Button
                       FilledButton(
                         onPressed: _isLoading ? null : _handleLogin,
                         style: FilledButton.styleFrom(
@@ -486,7 +512,6 @@ class _PublicLoginPageState extends State<PublicLoginPage> {
                       ),
                       const SizedBox(height: 16),
 
-                      // Bottom switch to Register
                       Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
@@ -550,25 +575,45 @@ class _ForgotPasswordSheetState extends State<_ForgotPasswordSheet> {
 
   void _sendReset() async {
     if (!_resetFormKey.currentState!.validate()) return;
-    setState(() => _isSending = true);
-
-    await Future<void>.delayed(const Duration(milliseconds: 600));
-    if (!mounted) return;
-
-    Navigator.pop(context);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          widget.isEnglish
-              ? 'Reset link sent! Check your ${_usePhone ? "phone SMS" : "email"}.'
-              : 'रिसेट लिङ्क पठाइयो! आफ्नो ${_usePhone ? "मोबाइल सन्देश" : "इमेल"} जाँच गर्नुहोस्।',
+    if (_usePhone) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            widget.isEnglish
+                ? 'Password reset is available by email. Please use your registered email address.'
+                : 'पासवर्ड रिसेट इमेलबाट मात्र उपलब्ध छ।',
+          ),
         ),
-        backgroundColor: const Color(0xFF1B5E20),
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        margin: const EdgeInsets.all(16),
-      ),
-    );
+      );
+      return;
+    }
+    setState(() => _isSending = true);
+    try {
+      await AuthServices().sendPasswordReset(_resetController.text.trim());
+      if (!mounted) return;
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            widget.isEnglish
+                ? 'Reset link sent! Check your email.'
+                : 'रिसेट लिङ्क पठाइयो! आफ्नो इमेल जाँच गर्नुहोस्।',
+          ),
+          backgroundColor: const Color(0xFF1B5E20),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          margin: const EdgeInsets.all(16),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isSending = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(AuthMessages.from(e))));
+    }
   }
 
   @override

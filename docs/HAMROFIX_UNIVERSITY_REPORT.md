@@ -1,0 +1,9 @@
+HamroFix: Community Problem Reporting App
+
+ABSTRACT
+Local roads, drains, lights, and waste problems in Nepal are still often reported by phone, by walking to a ward office, or by posting on social media. Those methods are slow. They also make it hard to prove who reported the issue, who accepted it, who inspected it, and who approved the money. This project presents HamroFix, a mobile application built with Flutter and Firebase. The app gives four real user types a shared workflow: the public reports a civic problem with a photo and GPS; the official reviews and assigns work; the worker inspects the site and lists materials; the admin checks the budget. After work is funded and finished, the public can post before-and-after photos on a community feed. The system also supports English and Nepali, anonymous reporting (the ward official sees the problem, not the name; the admin can still see the name if fraud is suspected), likes and comment counts on the feed, and a worker payment rule of 15 percent of the approved task budget. The report explains why this design was chosen, what similar products already do, how the database is planned, and how a student should present screenshots so a marker can follow the story of the product.
+Keywords: civic reporting, e-governance, Flutter, Firebase, Firestore, ward office, Nepal, anonymous reporting
+
+ACKNOWLEDGEMENT
+I would like to thank my supervisor for guidance during this project. I also thank classmates and testers who used the four roles (public, official, worker, and admin) and told me where the screens were confusing. I am grateful to open civic projects such as FixMyStreet, which showed that map-based reporting can be a public good, and to Nepal’s digital government work, which shows that people already expect services on a phone. Any mistakes in this report are my own.
+

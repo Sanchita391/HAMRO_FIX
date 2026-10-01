@@ -6,8 +6,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'package:hamro_fix/core/l10n/app_locale.dart';
+import 'package:hamro_fix/core/platform/app_target.dart';
 import 'package:hamro_fix/screens/auth/landing_page.dart';
+import 'package:hamro_fix/screens/auth/use_correct_app_page.dart';
 import 'package:hamro_fix/screens/auth/official/official_signup.dart';
+import 'package:hamro_fix/widgets/staff_auth_shell.dart';
+import 'package:hamro_fix/widgets/web_narrow_body.dart';
+import 'package:hamro_fix/models/public_model.dart';
+import 'package:hamro_fix/services/auth_messages.dart';
+import 'package:hamro_fix/services/auth_services.dart';
 
 class OfficialLoginPage extends StatefulWidget {
   const OfficialLoginPage({super.key});
@@ -26,6 +34,12 @@ class _OfficialLoginPageState extends State<OfficialLoginPage> {
   bool _isEnglish = true;
   bool _obscurePassword = true;
   bool _isLoading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _isEnglish = AppLocale.instance.isEnglish;
+  }
 
   @override
   void dispose() {
@@ -61,22 +75,17 @@ class _OfficialLoginPageState extends State<OfficialLoginPage> {
   }
 
   String? _validateEmployeeId(String? v) {
-    if (v == null || v.trim().isEmpty) {
-      return _isEnglish
-          ? 'Employee/Department ID is required'
-          : 'कर्मचारी/शाखा आईडी आवश्यक छ';
-    }
     return null;
   }
 
   String? _validatePassword(String? v) {
-    if (v == null || v.isEmpty) {
+    if (v == null || v.trim().isEmpty) {
       return _isEnglish ? 'Password is required' : 'पासवर्ड आवश्यक छ';
     }
-    if (v.length < 8) {
+    if (v.trim().length < 6) {
       return _isEnglish
-          ? 'Minimum 8 characters required'
-          : 'कम्तीमा ८ अक्षर चाहिन्छ';
+          ? 'Password must be at least 6 characters'
+          : 'पासवर्ड कम्तीमा ६ अक्षरको हुनुपर्छ';
     }
     return null;
   }
@@ -95,15 +104,21 @@ class _OfficialLoginPageState extends State<OfficialLoginPage> {
     }
 
     setState(() => _isLoading = true);
-    await Future<void>.delayed(const Duration(milliseconds: 750));
+    try {
+      await AuthServices().loginWithEmail(
+        email: _emailController.text,
+        password: _passwordController.text.trim(),
+        expectedRole: UserRole.official,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+      _showSnack(AuthMessages.from(e), isError: true);
+      return;
+    }
     if (!mounted) return;
-
     setState(() => _isLoading = false);
-    _showSnack(
-      _isEnglish
-          ? 'Signed in successfully. Welcome, Ward Official.'
-          : 'लगइन सफल भयो। वडा अधिकारी, स्वागत छ।',
-    );
+    Navigator.of(context).popUntil((route) => route.isFirst);
   }
 
   void _showSnack(String msg, {bool isError = false}) {
@@ -200,106 +215,50 @@ class _OfficialLoginPageState extends State<OfficialLoginPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFF6FBF6),
-      appBar: AppBar(
-        backgroundColor: const Color(0xFFF6FBF6),
-        surfaceTintColor: Colors.transparent,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_rounded, color: Colors.black87),
-          tooltip: _isEnglish
-              ? 'Back to Landing Page'
-              : 'गृहपृष्ठमा फर्कनुहोस्',
-          onPressed: _navigateBackToLanding,
-        ),
-        title: Text(
-          _isEnglish ? 'Official Sign In' : 'आधिकारिक लगइन',
-          style: const TextStyle(
-            fontWeight: FontWeight.w700,
-            fontSize: 18,
-            color: Colors.black87,
-          ),
-        ),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 12),
-            child: TextButton.icon(
-              onPressed: () {
-                HapticFeedback.selectionClick();
-                setState(() => _isEnglish = !_isEnglish);
-              },
-              icon: const Icon(Icons.language_rounded, size: 18),
-              label: Text(
-                _isEnglish ? 'नेपाली' : 'English',
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 13,
-                ),
-              ),
-              style: TextButton.styleFrom(
-                foregroundColor: const Color(0xFF2E7D32),
-                visualDensity: VisualDensity.compact,
-              ),
-            ),
-          ),
-        ],
-      ),
-      body: SafeArea(
-        child: SingleChildScrollView(
+    if (AppTarget.isMobileApp) {
+      return const LoginPlatformGuard(
+        staffWebPage: true,
+        child: SizedBox.shrink(),
+      );
+    }
+    return StaffAuthShell(
+      onBack: _navigateBackToLanding,
+      child: SafeArea(
+        child: WebNarrowBody(
+          child: SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(24, 8, 24, 32),
           child: Form(
             key: _formKey,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Center(
-                  child: Column(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFE8F5E9),
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(
-                            color: const Color(0xFFA5D6A7),
-                            width: 1.2,
-                          ),
-                        ),
-                        child: Image.asset(
-                          'assets/images/logo.png',
-                          height: 46,
-                          width: 46,
-                          errorBuilder: (_, __, ___) => const Icon(
-                            Icons.assured_workload_rounded,
-                            size: 46,
-                            color: Color(0xFF2E7D32),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      Text(
-                        _isEnglish ? 'Official Account' : 'आधिकारिक खाता',
-                        style: const TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.w800,
-                          color: Colors.black87,
-                          letterSpacing: -0.5,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        _isEnglish
-                            ? 'Sign in with credentials issued by the municipality'
-                            : 'नगरपालिकाले दिएको प्रमाणपत्रबाट लगइन गर्नुहोस्',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey.shade700,
-                        ),
-                      ),
-                    ],
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton(
+                    onPressed: () {
+                      HapticFeedback.selectionClick();
+                      setState(() {
+                        _isEnglish = !_isEnglish;
+                        AppLocale.instance.setEnglish(_isEnglish);
+                      });
+                    },
+                    child: Text(_isEnglish ? 'नेपाली' : 'English'),
                   ),
+                ),
+                Text(
+                  _isEnglish ? 'Official Sign In' : 'आधिकारिक लगइन',
+                  style: const TextStyle(
+                    fontSize: 26,
+                    fontWeight: FontWeight.w800,
+                    color: Color(0xFF1A3D1A),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  _isEnglish
+                      ? 'Sign in with credentials issued by the municipality'
+                      : 'नगरपालिकाले दिएको प्रमाणपत्रबाट लगइन गर्नुहोस्',
+                  style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
                 ),
                 const SizedBox(height: 20),
                 Container(
@@ -385,8 +344,8 @@ class _OfficialLoginPageState extends State<OfficialLoginPage> {
                   validator: _validateEmployeeId,
                   decoration: _inputDecoration(
                     label: _isEnglish
-                        ? 'Employee/Department ID'
-                        : 'कर्मचारी/शाखा आईडी',
+                        ? 'Employee ID (optional)'
+                        : 'कर्मचारी आईडी (ऐच्छिक)',
                     hint: 'EMP-102938',
                     icon: Icons.badge_outlined,
                   ),
@@ -443,7 +402,39 @@ class _OfficialLoginPageState extends State<OfficialLoginPage> {
                           ),
                   ),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 8),
+                TextButton(
+                  onPressed: _isLoading
+                      ? null
+                      : () async {
+                          final email = _emailController.text.trim();
+                          if (email.isEmpty) {
+                            _showSnack(
+                              _isEnglish
+                                  ? 'Enter your official email first'
+                                  : 'पहिले आधिकारिक इमेल लेख्नुहोस्',
+                              isError: true,
+                            );
+                            return;
+                          }
+                          try {
+                            await AuthServices().sendStaffLoginEmail(email);
+                            if (!mounted) return;
+                            _showSnack(
+                              _isEnglish
+                                  ? 'Password reset email sent. Set a new password, then sign in.'
+                                  : 'पासवर्ड रिसेट इमेल पठाइयो।',
+                            );
+                          } catch (e) {
+                            if (!mounted) return;
+                            _showSnack(AuthMessages.from(e), isError: true);
+                          }
+                        },
+                  child: Text(
+                    _isEnglish ? 'Forgot password? Email a reset link' : 'पासवर्ड बिर्सनुभयो?',
+                  ),
+                ),
+                const SizedBox(height: 8),
                 Text(
                   _isEnglish
                       ? 'Official accounts are issued by municipality administrators. Use Request Access if you need credentials.'
@@ -454,6 +445,7 @@ class _OfficialLoginPageState extends State<OfficialLoginPage> {
               ],
             ),
           ),
+        ),
         ),
       ),
     );

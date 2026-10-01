@@ -14,13 +14,19 @@
 //    with a bulletproof errorBuilder fallback so it NEVER crashes.
 // ============================================================================
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'package:hamro_fix/core/l10n/app_locale.dart';
+import 'package:hamro_fix/core/platform/app_target.dart';
+import 'package:hamro_fix/screens/auth/staff_web_sign_in.dart';
 import 'package:hamro_fix/screens/auth/admin/admin_signup.dart';
 import 'package:hamro_fix/screens/auth/official/official_login.dart';
+import 'package:hamro_fix/screens/auth/official/official_signup.dart';
 import 'package:hamro_fix/screens/auth/public/public_login.dart';
 import 'package:hamro_fix/screens/auth/public/public_signup.dart';
+import 'package:hamro_fix/screens/auth/worker/worker_login.dart';
 import 'package:hamro_fix/screens/auth/worker/worker_signup.dart';
 
 /// Dedicated Light Green Civic Theme to eliminate Flutter's default purple
@@ -38,7 +44,7 @@ final ThemeData kHamroFixLightGreenTheme = ThemeData(
     secondaryContainer: const Color(0xFFE8F5E9), // Soft pastel green
     onSecondaryContainer: const Color(0xFF1B5E20),
     surface: const Color(0xFFF6FBF4), // Light green-tinted canvas
-    onSurface: const Color(0xFF191C1A),
+    onSurface: const Color(0xFF0E4726),
     surfaceContainerLow: const Color(0xFFEDF5EC),
     surfaceContainer: const Color(0xFFE3EDE1),
     surfaceContainerHigh: const Color(0xFFD9E5D7),
@@ -52,57 +58,70 @@ final ThemeData kHamroFixLightGreenTheme = ThemeData(
   ),
 );
 
-/// Safe Logo Widget: checks 'assets/image/logo.png', 'assets/images/logo.png',
-/// and 'assets/logo.png' before falling back to a civic icon container.
 class HamroFixLogo extends StatelessWidget {
   final double size;
   const HamroFixLogo({super.key, this.size = 32});
+
+  static const assetPath = 'assets/images/logo.png';
 
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
 
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(8),
-      child: Image.asset(
-        'assets/image/logo.png', // Priority 1: user pasted path
+    return Image.asset(
+      assetPath,
+      width: size,
+      height: size,
+      fit: BoxFit.contain,
+      filterQuality: FilterQuality.medium,
+      errorBuilder: (context, _, __) => Container(
         width: size,
         height: size,
-        fit: BoxFit.contain,
-        errorBuilder: (context, _, __) => Image.asset(
-          'assets/images/logo.png', // Priority 2: plural folder
-          width: size,
-          height: size,
-          fit: BoxFit.contain,
-          errorBuilder: (context, _, __) => Image.asset(
-            'assets/logo.png', // Priority 3: root assets folder
-            width: size,
-            height: size,
-            fit: BoxFit.contain,
-            errorBuilder: (context, _, __) => Container(
-              width: size,
-              height: size,
-              decoration: BoxDecoration(
-                color: colorScheme.primaryContainer,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFFA5D6A7)),
-              ),
-              child: Icon(
-                Icons.shield_outlined,
-                size: size * 0.6,
-                color: colorScheme.onPrimaryContainer,
-              ),
-            ),
-          ),
+        decoration: BoxDecoration(
+          color: colorScheme.primaryContainer,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: const Color(0xFFA5D6A7)),
+        ),
+        child: Icon(
+          Icons.shield_outlined,
+          size: size * 0.6,
+          color: colorScheme.onPrimaryContainer,
         ),
       ),
     );
   }
 }
 
+/// Light plate so the dark-green logo stays visible.
+class HamroFixLogoBadge extends StatelessWidget {
+  const HamroFixLogoBadge({
+    super.key,
+    this.size = 48,
+    this.padding = 12,
+    this.background = Colors.white,
+  });
+
+  final double size;
+  final double padding;
+  final Color background;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: EdgeInsets.all(padding),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFF1A3D1A), width: 2.5),
+      ),
+      child: HamroFixLogo(size: size),
+    );
+  }
+}
+
 enum AppRole {
   public(
-    title: 'Public Citizen',
+    title: 'Public',
     titleNp: 'सार्वजनिक नागरिक',
     subtitle: 'Report and track local issues in your neighborhood',
     subtitleNp: 'आफ्नो टोल-छिमेकका समस्या रिपोर्ट र ट्र्याक गर्नुहोस्',
@@ -117,7 +136,7 @@ enum AppRole {
     subtitleNp: 'तोकिएका कार्यहरू समाधान गरी प्रगति पेश गर्नुहोस्',
     icon: Icons.engineering_rounded,
     allowRegister: true,
-    allowLogin: false,
+    allowLogin: true,
     restrictionNote:
         'Account requires administrative clearance before initial login',
     restrictionNoteNp: 'पहिलो लगइन अघि प्रशासनिक स्वीकृतिको आवश्यकता पर्दछ',
@@ -182,10 +201,57 @@ class _LandingPageState extends State<LandingPage> {
   // Locale filter: 0 = Bilingual, 1 = English, 2 = Nepali
   int _localeIndex = 0;
 
+  List<AppRole> get _visibleRoles {
+    if (AppTarget.isWeb) {
+      return const [AppRole.official, AppRole.admin];
+    }
+    return const [AppRole.public, AppRole.worker];
+  }
+
+  Widget _languageSwitch(ColorScheme colorScheme, {bool onDark = false}) {
+    return SegmentedButton<int>(
+      segments: const [
+        ButtonSegment(value: 0, label: Text('Dual')),
+        ButtonSegment(value: 1, label: Text('EN')),
+        ButtonSegment(value: 2, label: Text('नेपाली')),
+      ],
+      selected: {_localeIndex},
+      onSelectionChanged: (set) {
+        HapticFeedback.selectionClick();
+        final index = set.first;
+        setState(() => _localeIndex = index);
+        if (index == 1) {
+          AppLocale.instance.setEnglish(true);
+        } else if (index == 2) {
+          AppLocale.instance.setEnglish(false);
+        }
+      },
+      showSelectedIcon: false,
+      style: ButtonStyle(
+        visualDensity: VisualDensity.compact,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        foregroundColor: WidgetStatePropertyAll(
+          onDark ? Colors.white : colorScheme.onSurface,
+        ),
+      ),
+    );
+  }
+
   void _onRoleAction(BuildContext context, AppRole role, bool isRegister) {
     HapticFeedback.lightImpact();
 
-    final isPermitted = isRegister ? role.allowRegister : role.allowLogin;
+    if (AppTarget.isMobileApp &&
+        (role == AppRole.official || role == AppRole.admin)) {
+      return;
+    }
+    if (AppTarget.isWeb && (role == AppRole.public || role == AppRole.worker)) {
+      return;
+    }
+
+    final canRegister = role == AppRole.official && kIsWeb
+        ? true
+        : role.allowRegister;
+    final isPermitted = isRegister ? canRegister : role.allowLogin;
     if (!isPermitted) {
       _showRestrictionSheet(context, role, isRegister);
       return;
@@ -194,8 +260,10 @@ class _LandingPageState extends State<LandingPage> {
     final Widget targetPage = switch (role) {
       AppRole.public =>
         isRegister ? const PublicSignupPage() : const PublicLoginPage(),
-      AppRole.worker => const WorkerSignupPage(),
-      AppRole.official => const OfficialLoginPage(),
+      AppRole.worker =>
+        isRegister ? const WorkerSignupPage() : const WorkerLoginPage(),
+      AppRole.official =>
+        isRegister ? const OfficialSignupPage() : const OfficialLoginPage(),
       AppRole.admin => const AdminSignupPage(),
     };
 
@@ -300,6 +368,10 @@ class _LandingPageState extends State<LandingPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (AppTarget.isWeb) {
+      return const StaffWebSignInPage();
+    }
+
     // Theme wrapper forces Light Green theme even if main.dart uses Flutter's default purple
     return Theme(
       data: kHamroFixLightGreenTheme,
@@ -309,113 +381,108 @@ class _LandingPageState extends State<LandingPage> {
           final colorScheme = theme.colorScheme;
 
           return Scaffold(
-            backgroundColor: colorScheme.surface,
-            body: CustomScrollView(
-              slivers: [
-                SliverAppBar.large(
-                  expandedHeight: 180,
-                  floating: false,
-                  pinned: true,
-                  backgroundColor: colorScheme.surface,
-                  scrolledUnderElevation: 3,
-                  actions: [
-                    Padding(
-                      padding: const EdgeInsets.only(right: 16),
-                      child: SegmentedButton<int>(
-                        segments: const [
-                          ButtonSegment(value: 0, label: Text('Dual')),
-                          ButtonSegment(value: 1, label: Text('EN')),
-                          ButtonSegment(value: 2, label: Text('नेपाली')),
-                        ],
-                        selected: {_localeIndex},
-                        onSelectionChanged: (set) {
-                          HapticFeedback.selectionClick();
-                          setState(() => _localeIndex = set.first);
-                        },
-                        showSelectedIcon: false,
-                        style: const ButtonStyle(
-                          visualDensity: VisualDensity.compact,
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            backgroundColor: const Color(0xFFE8F5E9),
+            body: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 720),
+                child: CustomScrollView(
+                  slivers: [
+                    SliverAppBar.large(
+                      expandedHeight: 180,
+                      floating: false,
+                      pinned: true,
+                      backgroundColor: const Color(0xFFE8F5E9),
+                      scrolledUnderElevation: 3,
+                      actions: [
+                        Padding(
+                          padding: const EdgeInsets.only(right: 16),
+                          child: _languageSwitch(colorScheme),
+                        ),
+                      ],
+                      flexibleSpace: FlexibleSpaceBar(
+                        titlePadding: const EdgeInsetsDirectional.only(
+                          start: 20,
+                          bottom: 16,
+                        ),
+                        title: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const HamroFixLogoBadge(size: 28, padding: 6),
+                            const SizedBox(width: 10),
+                            Text(
+                              'HamroFix',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w800,
+                                color: colorScheme.onSurface,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ),
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (_localeIndex != 2)
+                              Text(
+                                'Choose Your Access Portal',
+                                style: theme.textTheme.headlineSmall?.copyWith(
+                                  fontWeight: FontWeight.w800,
+                                  color: colorScheme.onSurface,
+                                  letterSpacing: -0.5,
+                                ),
+                              ),
+                            if (_localeIndex != 1)
+                              Text(
+                                'तपाईंको भूमिका छनोट गर्नुहोस्',
+                                style: theme.textTheme.titleMedium?.copyWith(
+                                  color: colorScheme.primary,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            const SizedBox(height: 6),
+                            Text(
+                              _localeIndex == 2
+                                  ? (AppTarget.isWeb
+                                        ? 'अधिकारी र एडमिन यहाँ लगइन गर्नुहोस्। सार्वजनिक र कामदारले मोबाइल एप प्रयोग गर्छन्।'
+                                        : 'समुदायको विकास र सुधारका लागि हातेमालो गरौं।')
+                                  : (AppTarget.isWeb
+                                        ? 'Official and Admin sign in here. Public and workers use the HamroFix phone app.'
+                                        : 'Lets join hands for the development and improvement of our community.'),
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                color: colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    SliverPadding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      sliver: SliverList.separated(
+                        itemCount: _visibleRoles.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 12),
+                        itemBuilder: (context, index) {
+                          final role = _visibleRoles[index];
+                          return _RoleCard(
+                            role: role,
+                            localeIndex: _localeIndex,
+                            allowRegister: role == AppRole.official && kIsWeb
+                                ? true
+                                : role.allowRegister,
+                            onAction: (isRegister) =>
+                                _onRoleAction(context, role, isRegister),
+                          );
+                        },
+                      ),
+                    ),
+                    const SliverToBoxAdapter(child: SizedBox(height: 32)),
                   ],
-                  flexibleSpace: FlexibleSpaceBar(
-                    titlePadding: const EdgeInsetsDirectional.only(
-                      start: 20,
-                      bottom: 16,
-                    ),
-                    title: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        // Safe logo loader checks 'assets/image/logo.png', 'assets/images/logo.png', etc.
-                        const HamroFixLogo(size: 32),
-                        const SizedBox(width: 10),
-                        Text(
-                          'HamroFix',
-                          style: TextStyle(
-                            fontWeight: FontWeight.w800,
-                            color: colorScheme.onSurface,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
                 ),
-                SliverToBoxAdapter(
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (_localeIndex != 2)
-                          Text(
-                            'Choose Your Access Portal',
-                            style: theme.textTheme.headlineSmall?.copyWith(
-                              fontWeight: FontWeight.w800,
-                              color: colorScheme.onSurface,
-                              letterSpacing: -0.5,
-                            ),
-                          ),
-                        if (_localeIndex != 1)
-                          Text(
-                            'तपाईंको भूमिका छनोट गर्नुहोस्',
-                            style: theme.textTheme.titleMedium?.copyWith(
-                              color: colorScheme.primary,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        const SizedBox(height: 6),
-                        Text(
-                          _localeIndex == 2
-                              ? ' समुदायको विकास र सुधारका लागि हातेमालो गरौं।'
-                              : 'Lets join hands for the development and improvement of our community.',
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            color: colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                SliverPadding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  sliver: SliverList.separated(
-                    itemCount: AppRole.values.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 12),
-                    itemBuilder: (context, index) {
-                      final role = AppRole.values[index];
-                      return _RoleCard(
-                        role: role,
-                        localeIndex: _localeIndex,
-                        onAction: (isRegister) =>
-                            _onRoleAction(context, role, isRegister),
-                      );
-                    },
-                  ),
-                ),
-                const SliverToBoxAdapter(child: SizedBox(height: 32)),
-              ],
+              ),
             ),
           );
         },
@@ -429,11 +496,15 @@ class _RoleCard extends StatelessWidget {
     required this.role,
     required this.localeIndex,
     required this.onAction,
+    required this.allowRegister,
+    this.fill = false,
   });
 
   final AppRole role;
   final int localeIndex;
   final ValueChanged<bool> onAction;
+  final bool allowRegister;
+  final bool fill;
 
   @override
   Widget build(BuildContext context) {
@@ -444,30 +515,30 @@ class _RoleCard extends StatelessWidget {
 
     return Card(
       elevation: 0,
-      color: colorScheme.surfaceContainerLow,
+      color: Colors.white,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: BorderSide(
-          color: colorScheme.outlineVariant.withValues(alpha: 0.6),
-          width: 1,
+        borderRadius: BorderRadius.circular(20),
+        side: const BorderSide(
+          color: Color(0xFFA5D6A7),
+          width: 1.4,
         ),
       ),
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: EdgeInsets.all(fill ? 28 : 16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
                 Container(
-                  padding: const EdgeInsets.all(10),
+                  padding: EdgeInsets.all(fill ? 14 : 10),
                   decoration: BoxDecoration(
                     color: colorScheme.primaryContainer,
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(14),
                   ),
                   child: Icon(
                     role.icon,
-                    size: 22,
+                    size: fill ? 32 : 22,
                     color: colorScheme.onPrimaryContainer,
                   ),
                 ),
@@ -478,8 +549,11 @@ class _RoleCard extends StatelessWidget {
                     children: [
                       Text(
                         isNp ? role.titleNp : role.title,
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w700,
+                        style: (fill
+                                ? theme.textTheme.titleLarge
+                                : theme.textTheme.titleMedium)
+                            ?.copyWith(
+                          fontWeight: FontWeight.w800,
                           color: colorScheme.onSurface,
                         ),
                       ),
@@ -496,64 +570,57 @@ class _RoleCard extends StatelessWidget {
                 ),
               ],
             ),
-            const SizedBox(height: 12),
+            SizedBox(height: fill ? 20 : 12),
             Text(
               isNp ? role.subtitleNp : role.subtitle,
-              style: theme.textTheme.bodySmall?.copyWith(
+              style: theme.textTheme.bodyMedium?.copyWith(
                 color: colorScheme.onSurfaceVariant,
-                height: 1.4,
+                height: 1.45,
+                fontSize: fill ? 15 : 13,
               ),
             ),
             if (isDual) ...[
-              const SizedBox(height: 4),
+              const SizedBox(height: 8),
               Text(
                 role.subtitleNp,
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: colorScheme.outline,
-                  height: 1.35,
+                  height: 1.4,
                 ),
               ),
             ],
-            const SizedBox(height: 16),
-            // Smart Material 3 Action Row
-            Row(
+            if (fill) const Spacer() else const SizedBox(height: 16),
+            Wrap(
+              spacing: 10,
+              runSpacing: 8,
               children: [
-                if (role.allowRegister)
-                  Expanded(
-                    child: FilledButton(
-                      onPressed: () => onAction(true),
-                      child: Text(isNp ? 'दर्ता गर्नुहोस्' : 'Register'),
-                    ),
+                if (allowRegister)
+                  FilledButton(
+                    onPressed: () => onAction(true),
+                    child: Text(isNp ? 'दर्ता गर्नुहोस्' : 'Register'),
                   )
                 else
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: () => onAction(true),
-                      icon: const Icon(Icons.lock_outline, size: 16),
-                      label: Text(isNp ? 'दर्ता नीति' : 'Invite Only'),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: colorScheme.outline,
-                      ),
+                  OutlinedButton(
+                    onPressed: () => onAction(true),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFF1A3D1A),
+                      side: const BorderSide(color: Color(0xFF2E7D32)),
                     ),
+                    child: Text(isNp ? 'दर्ता नीति' : 'Invite Only'),
                   ),
-                const SizedBox(width: 10),
                 if (role.allowLogin)
-                  Expanded(
-                    child: FilledButton.tonal(
-                      onPressed: () => onAction(false),
-                      child: Text(isNp ? 'लगइन' : 'Sign In'),
-                    ),
+                  FilledButton.tonal(
+                    onPressed: () => onAction(false),
+                    child: Text(isNp ? 'लगइन' : 'Sign In'),
                   )
                 else
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: () => onAction(false),
-                      icon: const Icon(Icons.info_outline, size: 16),
-                      label: Text(isNp ? 'स्वीकृति' : 'Approval Req.'),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: colorScheme.outline,
-                      ),
+                  OutlinedButton(
+                    onPressed: () => onAction(false),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFF1A3D1A),
+                      side: const BorderSide(color: Color(0xFF2E7D32)),
                     ),
+                    child: Text(isNp ? 'स्वीकृति' : 'Approval Req.'),
                   ),
               ],
             ),

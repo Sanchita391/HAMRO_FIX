@@ -1,13 +1,12 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:hamro_fix/main.dart';
+import 'package:hamro_fix/screens/auth/landing_page.dart';
 
 void main() {
-  testWidgets('App loads smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    // We changed "MyApp()" to "HamroFixApp()" to match your code.
-    await tester.pumpWidget(const HamroFixApp());
-
-    // Verify that the app title or a specific text exists
+  testWidgets('Landing page shows HamroFix', (WidgetTester tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(home: LandingPage()),
+    );
     expect(find.text('HamroFix'), findsAtLeast(1));
   });
 }
