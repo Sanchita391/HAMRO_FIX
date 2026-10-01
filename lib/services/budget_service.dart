@@ -159,7 +159,7 @@ class BudgetService {
           recipientUid: doc.id,
           title: 'Budget to finalize',
           body: 'Official forwarded budget for report ${request.reportId}.',
-          type: 'budget',
+          type: AlertType.budget,
           relatedId: request.reportId,
         );
       }
@@ -222,28 +222,6 @@ class BudgetService {
         resolved = ReportIssue.fromFirestore(doc);
       }
     }
-    if (resolved != null) {
-      await _notifications.send(
-        recipientUid: resolved.uid,
-        title: approve ? 'Budget finalized' : 'Budget rejected',
-        body: approve
-            ? 'Admin set NPR ${itemsTotal.toStringAsFixed(0)} for ${resolved.publicId}. An official will send it to the field worker.'
-            : remarks,
-        type: 'budget',
-        relatedId: resolved.id,
-      );
-      for (final workerId in resolved.crewIds) {
-        await _notifications.send(
-          recipientUid: workerId,
-          title: approve ? 'Budget finalized' : 'Budget rejected',
-          body: approve
-              ? 'Task budget NPR ${itemsTotal.toStringAsFixed(0)}. Your salary is NPR ${salary.toStringAsFixed(0)} (15% extra).'
-              : remarks,
-          type: 'budget',
-          relatedId: resolved.id,
-        );
-      }
-    }
     try {
       final users = await _firestore.collection('users').get();
       for (final doc in users.docs) {
@@ -255,15 +233,16 @@ class BudgetService {
         final isOfficial =
             role == UserRole.official || roles.contains(UserRole.official);
         if (!isOfficial) continue;
+        if (resolved != null && doc.id == resolved.uid) continue;
         await _notifications.send(
           recipientUid: doc.id,
           title: approve
               ? 'Budget returned — assign funded work'
               : 'Budget rejected',
           body: approve
-              ? 'Task budget NPR ${itemsTotal.toStringAsFixed(0)} for ${resolved?.publicId ?? request.reportId}. Worker salary NPR ${salary.toStringAsFixed(0)} (15%). Send funded work to the inspecting worker and the public reporter.'
+              ? 'Task budget NPR ${itemsTotal.toStringAsFixed(0)} for ${resolved?.publicId ?? request.reportId}. Worker salary NPR ${salary.toStringAsFixed(0)} (15%). Send funded work to the worker and the public reporter.'
               : remarks,
-          type: 'budget',
+          type: AlertType.budget,
           relatedId: request.reportId,
         );
       }

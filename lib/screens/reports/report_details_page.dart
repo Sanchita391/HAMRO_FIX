@@ -14,6 +14,9 @@ import 'package:hamro_fix/services/location_service.dart';
 import 'package:hamro_fix/services/report_service.dart';
 import 'package:hamro_fix/services/task_service.dart';
 import 'package:hamro_fix/widgets/stored_image.dart';
+import 'package:hamro_fix/widgets/stored_video.dart';
+import 'package:hamro_fix/widgets/xfile_video_preview.dart';
+import 'package:hamro_fix/widgets/web_narrow_body.dart';
 import 'package:hamro_fix/widgets/worker_payment.dart';
 
 class ReportDetailsPage extends StatefulWidget {
@@ -37,6 +40,21 @@ class _ReportDetailsPageState extends State<ReportDetailsPage> {
 
   UserProfile get profile => widget.profile;
   bool get isOfficial => profile.hasRole(UserRole.official);
+
+  bool _canAddWorkers(ReportIssue report) {
+    if (report.crewIds.isNotEmpty) {
+      return report.status != ReportStatus.workCompleted &&
+          report.status != ReportStatus.completed &&
+          report.status != ReportStatus.publicFeed &&
+          report.status != ReportStatus.verifiedFake &&
+          report.status != ReportStatus.officialDeclined;
+    }
+    return report.status == ReportStatus.officialAccepted ||
+        report.status == ReportStatus.verifiedValid ||
+        report.status == ReportStatus.workerAssigned ||
+        report.status == ReportStatus.workerInspection;
+  }
+
   bool get isWorker => profile.hasRole(UserRole.worker);
   bool get isAdmin => profile.hasRole(UserRole.admin);
   bool get isPublic => profile.hasRole(UserRole.public);
@@ -80,7 +98,9 @@ class _ReportDetailsPageState extends State<ReportDetailsPage> {
         return Scaffold(
           backgroundColor: HamroFixTheme.canvas,
           appBar: AppBar(title: Text(report.publicId)),
-          body: ListView(
+          body: WebNarrowBody(
+            maxWidth: 720,
+            child: ListView(
             padding: const EdgeInsets.all(16),
             children: [
               if (report.imageUrl != null)
@@ -88,6 +108,13 @@ class _ReportDetailsPageState extends State<ReportDetailsPage> {
                   borderRadius: BorderRadius.circular(16),
                   child: StoredImage(report.imageUrl, height: 200),
                 ),
+              if ((report.playableVideoUrl ?? '').isNotEmpty) ...[
+                const SizedBox(height: 12),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(16),
+                  child: StoredVideo(report.playableVideoUrl, height: 220),
+                ),
+              ],
               const SizedBox(height: 12),
               SelectableText(
                 report.publicId,
@@ -116,15 +143,21 @@ class _ReportDetailsPageState extends State<ReportDetailsPage> {
                     Chip(label: Text(report.municipality!)),
                   if (report.crewLabel.isNotEmpty)
                     Chip(label: Text('Workers: ${report.crewLabel}')),
+                  if (report.isAnonymous)
+                    const Chip(
+                      label: Text('Anonymous'),
+                      backgroundColor: Color(0xFFEEEEEE),
+                    ),
                 ],
               ),
+              const SizedBox(height: 12),
+              _ReporterPrivacyCard(report: report, profile: profile),
               if (report.hasLocation) ...[
                 const SizedBox(height: 8),
                 Text('GPS: ${report.latitude}, ${report.longitude}'),
-                TextButton.icon(
+                TextButton(
                   onPressed: () => _openMaps(report),
-                  icon: const Icon(Icons.near_me_rounded),
-                  label: const Text('Open this spot on the map'),
+                  child: const Text('Open this spot on the map'),
                 ),
               ],
               if (report.approvedBudgetAmount != null)
@@ -153,31 +186,54 @@ class _ReportDetailsPageState extends State<ReportDetailsPage> {
                   ),
                 ),
               ],
-              if (report.completionImages.isNotEmpty ||
-                  report.proofImageUrl != null) ...[
+              if (report.workerEvidenceVideos.isNotEmpty) ...[
                 const SizedBox(height: 12),
                 const Text(
-                  'Completed work',
+                  'Inspection videos',
                   style: TextStyle(fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: 8),
-                SizedBox(
-                  height: 90,
-                  child: ListView(
-                    scrollDirection: Axis.horizontal,
-                    children: [
-                      for (final url in {
-                        ...report.completionImages,
-                        if (report.proofImageUrl != null) report.proofImageUrl!,
-                      })
-                        Padding(
-                          padding: const EdgeInsets.only(right: 8),
-                          child: StoredImage(url, width: 90, height: 90),
-                        ),
-                    ],
+                for (final url in report.workerEvidenceVideos)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: StoredVideo(url, height: 180),
                   ),
-                ),
               ],
+              StreamBuilder<List<String>>(
+                stream: _reports.watchCompletionPhotos(report.id),
+                builder: (context, photoSnap) {
+                  final urls = <String>{
+                    ...report.completionImages,
+                    if (report.proofImageUrl != null) report.proofImageUrl!,
+                    ...?photoSnap.data,
+                  };
+                  if (urls.isEmpty) return const SizedBox.shrink();
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const SizedBox(height: 12),
+                      const Text(
+                        'Completed work',
+                        style: TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(height: 8),
+                      SizedBox(
+                        height: 90,
+                        child: ListView(
+                          scrollDirection: Axis.horizontal,
+                          children: [
+                            for (final url in urls)
+                              Padding(
+                                padding: const EdgeInsets.only(right: 8),
+                                child: StoredImage(url, width: 90, height: 90),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
               if (report.inspectionItems.isNotEmpty) ...[
                 const SizedBox(height: 12),
                 const Text(
@@ -232,6 +288,7 @@ class _ReportDetailsPageState extends State<ReportDetailsPage> {
               ),
               if (_busy) const LinearProgressIndicator(),
             ],
+            ),
           ),
         );
       },
@@ -266,16 +323,13 @@ class _ReportDetailsPageState extends State<ReportDetailsPage> {
           child: const Text('Decline'),
         ),
       ],
-      if (report.status == ReportStatus.officialAccepted ||
-          report.status == ReportStatus.verifiedValid ||
-          report.status == ReportStatus.workerAssigned)
-        FilledButton.icon(
+      if (_canAddWorkers(report))
+        FilledButton(
           onPressed: () => _assignWorkers(report),
-          icon: const Icon(Icons.groups_rounded),
-          label: Text(
+          child: Text(
             report.crewIds.isEmpty
                 ? 'Assign workers to inspect'
-                : 'Add or change workers (${report.crewIds.length})',
+                : 'Add more workers',
           ),
         ),
       if (report.workerVerification == 'fake' ||
@@ -306,9 +360,14 @@ class _ReportDetailsPageState extends State<ReportDetailsPage> {
               instructions:
                   'Complete funded work for ${report.publicId}. Approved budget NPR ${report.approvedBudgetAmount?.toStringAsFixed(0) ?? '0'}.',
             ),
-            'Approved budget sent to the inspecting worker and the public reporter. They can post it now.',
+            'Approved budget sent to the worker and the public reporter. They can post it now.',
           ),
-          child: const Text('Send approved budget to inspector & public'),
+          child: const Text('Send approved budget to worker & public'),
+        )
+      else if (report.isFundedBudgetSent)
+        FilledButton(
+          onPressed: null,
+          child: const Text('Done · budget sent'),
         ),
       if (report.status == ReportStatus.workCompleted)
         FilledButton(
@@ -336,6 +395,7 @@ class _ReportDetailsPageState extends State<ReportDetailsPage> {
       context: context,
       workers: approved,
       selectedIds: report.crewIds,
+      reportCategory: report.category,
     );
     if (selected == null || selected.isEmpty) return;
     await _run(
@@ -343,8 +403,11 @@ class _ReportDetailsPageState extends State<ReportDetailsPage> {
         reportId: report.id,
         workerIds: selected.map((person) => person.uid).toList(),
         workerNames: selected.map((person) => person.name).toList(),
+        report: report,
       ),
-      'Assigned ${selected.length} worker(s). The job is on their dashboards.',
+      report.crewIds.isEmpty
+          ? 'Assigned ${selected.length} worker(s). The job is on their dashboards.'
+          : 'Extra worker(s) added. They will see this task too.',
     );
   }
 
@@ -355,10 +418,9 @@ class _ReportDetailsPageState extends State<ReportDetailsPage> {
         report.status == ReportStatus.officialAccepted;
     return [
       if (report.hasLocation)
-        OutlinedButton.icon(
+        OutlinedButton(
           onPressed: () => _openMaps(report),
-          icon: const Icon(Icons.map_rounded),
-          label: const Text('Go to the reported spot'),
+          child: const Text('Go to the reported spot'),
         ),
       if (inspect)
         FilledButton(
@@ -400,6 +462,7 @@ class _ReportDetailsPageState extends State<ReportDetailsPage> {
           latitude: loc.latitude,
           longitude: loc.longitude,
           evidenceImages: draft.photos,
+          evidenceVideos: draft.videos,
           budgetItems: draft.items,
         );
         if (draft.decision == 'valid' && draft.items.isNotEmpty) {
@@ -499,6 +562,7 @@ class _InspectionDraft {
     required this.reason,
     required this.remarks,
     required this.photos,
+    required this.videos,
     required this.items,
   });
 
@@ -506,6 +570,7 @@ class _InspectionDraft {
   final String reason;
   final String remarks;
   final List<XFile> photos;
+  final List<XFile> videos;
   final List<Map<String, dynamic>> items;
 }
 
@@ -523,6 +588,7 @@ class _InspectionSheetState extends State<InspectionSheet> {
   final _remarks = TextEditingController(text: 'Materials needed on site');
   final _rows = <_MaterialRow>[];
   final _photos = <XFile>[];
+  final _videos = <XFile>[];
   String _decision = 'valid';
 
   @override
@@ -587,6 +653,7 @@ class _InspectionSheetState extends State<InspectionSheet> {
           ? 'Materials for ${widget.publicId}'
           : _remarks.text.trim(),
       photos: List<XFile>.from(_photos),
+      videos: List<XFile>.from(_videos),
       items: items,
     );
     await Future<void>.delayed(const Duration(milliseconds: 50));
@@ -597,10 +664,19 @@ class _InspectionSheetState extends State<InspectionSheet> {
   Future<void> _addPhoto({required bool video}) async {
     final picker = ImagePicker();
     final file = video
-        ? await picker.pickVideo(source: ImageSource.camera)
+        ? await picker.pickVideo(
+            source: ImageSource.camera,
+            maxDuration: const Duration(seconds: 10),
+          )
         : await picker.pickImage(source: ImageSource.camera, imageQuality: 80);
     if (!mounted || file == null) return;
-    setState(() => _photos.add(file));
+    setState(() {
+      if (video) {
+        _videos.add(file);
+      } else {
+        _photos.add(file);
+      }
+    });
   }
 
   @override
@@ -646,21 +722,38 @@ class _InspectionSheetState extends State<InspectionSheet> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  OutlinedButton.icon(
+                  OutlinedButton(
                     onPressed: () => _addPhoto(video: false),
-                    icon: const Icon(Icons.photo_camera_outlined),
-                    label: Text(
+                    child: Text(
                       _photos.isEmpty
                           ? 'Add inspection photo'
                           : '${_photos.length} photo(s) added',
                     ),
                   ),
                   const SizedBox(height: 8),
-                  OutlinedButton.icon(
+                  OutlinedButton(
                     onPressed: () => _addPhoto(video: true),
-                    icon: const Icon(Icons.videocam_outlined),
-                    label: const Text('Add a short video (if it fits)'),
+                    child: Text(
+                      _videos.isEmpty
+                          ? 'Add a short video (up to 10 seconds)'
+                          : '${_videos.length} video(s) added',
+                    ),
                   ),
+                  if (_videos.isNotEmpty) ...[
+                    const SizedBox(height: 10),
+                    for (final clip in _videos)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: XFileVideoPreview(
+                            file: clip,
+                            width: double.infinity,
+                            height: 180,
+                          ),
+                        ),
+                      ),
+                  ],
                   if (_decision == 'valid') ...[
                     const SizedBox(height: 20),
                     const Divider(),
@@ -703,11 +796,10 @@ class _InspectionSheetState extends State<InspectionSheet> {
                           ),
                         ),
                       ),
-                    TextButton.icon(
+                    TextButton(
                       onPressed: () =>
                           setState(() => _rows.add(_newRow())),
-                      icon: const Icon(Icons.add),
-                      label: const Text('Add another item'),
+                      child: const Text('Add another item'),
                     ),
                     TextField(
                       controller: _remarks,
@@ -855,10 +947,9 @@ class _MaterialsSheetState extends State<MaterialsSheet> {
                         ),
                       ),
                     ),
-                  TextButton.icon(
+                  TextButton(
                     onPressed: () => setState(() => _rows.add(_newRow())),
-                    icon: const Icon(Icons.add),
-                    label: const Text('Add item'),
+                    child: const Text('Add item'),
                   ),
                   TextField(
                     controller: _remarks,
@@ -939,7 +1030,7 @@ class _CompletionSheetState extends State<CompletionSheet> {
           const SizedBox(height: 12),
           TextField(controller: _notes, maxLines: 2),
           const SizedBox(height: 12),
-          OutlinedButton.icon(
+          OutlinedButton(
             onPressed: () async {
               final file = await ImagePicker().pickImage(
                 source: ImageSource.camera,
@@ -948,8 +1039,7 @@ class _CompletionSheetState extends State<CompletionSheet> {
               if (!mounted || file == null) return;
               setState(() => _photos.add(file));
             },
-            icon: const Icon(Icons.photo_camera_outlined),
-            label: Text(
+            child: Text(
               _photos.isEmpty
                   ? 'Add finished-work photo'
                   : '${_photos.length} photo(s)',
@@ -982,6 +1072,7 @@ Future<List<UserProfile>?> showAssignWorkersSheet({
   required BuildContext context,
   required List<UserProfile> workers,
   List<String> selectedIds = const [],
+  String? reportCategory,
 }) async {
   if (workers.isEmpty) {
     ScaffoldMessenger.of(context).showSnackBar(
@@ -990,6 +1081,32 @@ Future<List<UserProfile>?> showAssignWorkersSheet({
     return null;
   }
   final selected = {...selectedIds};
+  final lockedIds = {...selectedIds};
+  final addingMore = lockedIds.isNotEmpty;
+  final category = (reportCategory ?? '').trim();
+  final matched = category.isEmpty
+      ? workers
+      : workers
+            .where(
+              (worker) => WorkerSpecialties.matchesCategory(
+                worker.specializations,
+                category,
+              ),
+            )
+            .toList();
+  final others = category.isEmpty
+      ? const <UserProfile>[]
+      : workers
+            .where(
+              (worker) => !WorkerSpecialties.matchesCategory(
+                worker.specializations,
+                category,
+              ),
+            )
+            .toList();
+  final needed = category.isEmpty
+      ? const <String>{}
+      : WorkerSpecialties.forReportCategory(category);
   return showModalBottomSheet<List<UserProfile>>(
     context: context,
     isScrollControlled: true,
@@ -999,62 +1116,111 @@ Future<List<UserProfile>?> showAssignWorkersSheet({
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
         child: StatefulBuilder(
           builder: (context, setSheet) {
+            Widget workerTile(UserProfile person) {
+              final locked = lockedIds.contains(person.uid);
+              return CheckboxListTile(
+                value: selected.contains(person.uid),
+                title: Text(person.displayName),
+                subtitle: [
+                  if (locked) 'Already on this task',
+                  if (person.specialtyLabel.isNotEmpty) person.specialtyLabel,
+                  if ((person.municipality ?? '').isNotEmpty)
+                    person.municipality!,
+                ].isEmpty
+                    ? null
+                    : Text(
+                        [
+                          if (locked) 'Already on this task',
+                          if (person.specialtyLabel.isNotEmpty)
+                            person.specialtyLabel,
+                          if ((person.municipality ?? '').isNotEmpty)
+                            person.municipality!,
+                        ].join(' · '),
+                      ),
+                onChanged: locked
+                    ? null
+                    : (value) {
+                        setSheet(() {
+                          if (value == true) {
+                            selected.add(person.uid);
+                          } else {
+                            selected.remove(person.uid);
+                          }
+                        });
+                      },
+              );
+            }
+
+            Widget heading(String text) {
+              return Padding(
+                padding: const EdgeInsets.fromLTRB(4, 8, 4, 4),
+                child: Text(
+                  text,
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+              );
+            }
+
             return SizedBox(
               height: MediaQuery.sizeOf(context).height * 0.7,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Text(
-                    'Assign workers',
-                    style: TextStyle(fontWeight: FontWeight.w800, fontSize: 18),
+                  Text(
+                    addingMore ? 'Add more workers' : 'Assign workers',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 18,
+                    ),
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'Select every worker this task needs. A 5-person job can have 5 workers.',
+                    addingMore
+                        ? 'Already assigned workers stay on this job. Tick extra workers if they need help.'
+                        : category.isEmpty
+                        ? 'Select every worker this task needs. A 5-person job can have 5 workers.'
+                        : 'Public report: $category. Matching specialties are listed first so you can assign the right crew.',
                     style: TextStyle(
                       color: Colors.black.withValues(alpha: 0.6),
                     ),
                   ),
+                  if (needed.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'Needed: ${needed.join(', ')}',
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ],
                   const SizedBox(height: 12),
                   Expanded(
                     child: ListView(
                       children: [
-                        for (final person in workers)
-                          CheckboxListTile(
-                            value: selected.contains(person.uid),
-                            title: Text(person.displayName),
-                            subtitle: [
-                              if ((person.specialization ?? '').isNotEmpty)
-                                person.specialization!,
-                              if ((person.municipality ?? '').isNotEmpty)
-                                person.municipality!,
-                            ].isEmpty
-                                ? null
-                                : Text(
-                                    [
-                                      if ((person.specialization ?? '')
-                                          .isNotEmpty)
-                                        person.specialization!,
-                                      if ((person.municipality ?? '')
-                                          .isNotEmpty)
-                                        person.municipality!,
-                                    ].join(' · '),
-                                  ),
-                            onChanged: (value) {
-                              setSheet(() {
-                                if (value == true) {
-                                  selected.add(person.uid);
-                                } else {
-                                  selected.remove(person.uid);
-                                }
-                              });
-                            },
+                        if (category.isNotEmpty && matched.isEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: Text(
+                              'No approved worker has this specialty yet. Other workers are listed below.',
+                              style: TextStyle(
+                                color: Colors.orange.shade800,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
                           ),
+                        if (category.isNotEmpty && matched.isNotEmpty)
+                          heading('Matched for this category'),
+                        for (final person in matched) workerTile(person),
+                        if (others.isNotEmpty) ...[
+                          heading('Other workers'),
+                          for (final person in others) workerTile(person),
+                        ],
                       ],
                     ),
                   ),
                   FilledButton(
-                    onPressed: selected.isEmpty
+                    onPressed:
+                        (addingMore
+                            ? selected.difference(lockedIds).isEmpty
+                            : selected.isEmpty)
                         ? null
                         : () {
                             Navigator.pop(
@@ -1066,7 +1232,11 @@ Future<List<UserProfile>?> showAssignWorkersSheet({
                                   .toList(),
                             );
                           },
-                    child: Text('Assign ${selected.length} worker(s)'),
+                    child: Text(
+                      addingMore
+                          ? 'Add ${selected.difference(lockedIds).length} extra worker(s)'
+                          : 'Assign ${selected.length} worker(s)',
+                    ),
                   ),
                 ],
               ),
@@ -1076,4 +1246,154 @@ Future<List<UserProfile>?> showAssignWorkersSheet({
       );
     },
   );
+}
+
+class _ReporterPrivacyCard extends StatefulWidget {
+  const _ReporterPrivacyCard({required this.report, required this.profile});
+
+  final ReportIssue report;
+  final UserProfile profile;
+
+  @override
+  State<_ReporterPrivacyCard> createState() => _ReporterPrivacyCardState();
+}
+
+class _ReporterPrivacyCardState extends State<_ReporterPrivacyCard> {
+  late final Future<ReporterIdentity?> _identity;
+
+  @override
+  void initState() {
+    super.initState();
+    _identity = widget.profile.hasRole(UserRole.admin)
+        ? _loadIdentity()
+        : Future<ReporterIdentity?>.value(null);
+  }
+
+  ReportIssue get report => widget.report;
+  UserProfile get profile => widget.profile;
+
+  @override
+  Widget build(BuildContext context) {
+    if (profile.hasRole(UserRole.public) && report.uid == profile.uid) {
+      if (!report.isAnonymous) return const SizedBox.shrink();
+      return const _InfoBanner(
+        title: 'You submitted this anonymously',
+        body:
+            'Ward officials cannot see your name. Admin can review it if fraud is suspected.',
+      );
+    }
+    if (report.hidesReporterFrom(profile)) {
+      return const _InfoBanner(
+        title: 'Anonymous public report',
+        body:
+            'Reporter identity is hidden from this desk. Admin can open the same report to review it for fraud.',
+      );
+    }
+    if (profile.hasRole(UserRole.admin)) {
+      return FutureBuilder<ReporterIdentity?>(
+        future: _identity,
+        builder: (context, snapshot) {
+          final identity = snapshot.data;
+          return Card(
+            elevation: 0,
+            color: const Color(0xFFFFF8E1),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    report.isAnonymous
+                        ? 'Reporter identity (admin only)'
+                        : 'Reporter',
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  const SizedBox(height: 6),
+                  if (report.isAnonymous)
+                    const Text(
+                      'Hidden from officials. Shown here for security and fraud review.',
+                      style: TextStyle(fontSize: 12, color: Colors.black54),
+                    ),
+                  if (snapshot.connectionState == ConnectionState.waiting)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 8),
+                      child: LinearProgressIndicator(),
+                    )
+                  else ...[
+                    const SizedBox(height: 8),
+                    Text(identity?.name.isNotEmpty == true
+                        ? identity!.name
+                        : (report.citizenName?.isNotEmpty == true
+                              ? report.citizenName!
+                              : 'Name not on file')),
+                    if ((identity?.email ?? '').isNotEmpty)
+                      Text(identity!.email),
+                    if ((identity?.phone ?? '').isNotEmpty)
+                      Text(identity!.phone),
+                    if ((identity?.citizenshipNumber ?? '').isNotEmpty)
+                      Text('Citizenship: ${identity!.citizenshipNumber}'),
+                  ],
+                ],
+              ),
+            ),
+          );
+        },
+      );
+    }
+    if (!report.isAnonymous && (report.citizenName ?? '').trim().isNotEmpty) {
+      return Text(
+        'Reported by ${report.citizenName}',
+        style: const TextStyle(color: Colors.black54),
+      );
+    }
+    return const SizedBox.shrink();
+  }
+
+  Future<ReporterIdentity?> _loadIdentity() async {
+    if (report.isAnonymous) {
+      return ReportService().fetchReporterIdentity(report);
+    }
+    final user = await AuthServices().fetchProfile(report.uid);
+    if (user == null) {
+      return ReporterIdentity(
+        uid: report.uid,
+        name: report.citizenName ?? '',
+        email: '',
+        phone: '',
+      );
+    }
+    return ReporterIdentity(
+      uid: user.uid,
+      name: user.name,
+      email: user.email,
+      phone: user.phone,
+      citizenshipNumber: user.citizenshipNumber,
+    );
+  }
+}
+
+class _InfoBanner extends StatelessWidget {
+  const _InfoBanner({required this.title, required this.body});
+
+  final String title;
+  final String body;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      elevation: 0,
+      color: const Color(0xFFEEEEEE),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: const TextStyle(fontWeight: FontWeight.w800)),
+            const SizedBox(height: 4),
+            Text(body, style: const TextStyle(color: Colors.black54)),
+          ],
+        ),
+      ),
+    );
+  }
 }

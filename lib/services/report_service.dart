@@ -9,8 +9,10 @@ import 'package:hamro_fix/models/public_model.dart';
 import 'package:hamro_fix/services/audit_service.dart';
 import 'package:hamro_fix/services/notification_service.dart';
 import 'package:hamro_fix/services/storage_service.dart';
+import 'package:hamro_fix/services/video_storage_service.dart';
 import 'package:hamro_fix/widgets/worker_payment.dart';
 
+// Civic reports live in the Firestore "reports" collection.
 class ReportService {
   ReportService({
     FirebaseFirestore? firestore,
@@ -33,6 +35,7 @@ class ReportService {
   CollectionReference<Map<String, dynamic>> get _reports =>
       _firestore.collection('reports');
 
+  // Must be signed in before writing a report.
   User get _requireUser {
     final user = _auth.currentUser;
     if (user == null) {
@@ -41,6 +44,7 @@ class ReportService {
     return user;
   }
 
+  // Public user creates a report with photo, GPS, and optional anonymous flag.
   Future<void> createReport({
     required String title,
     required String description,
@@ -87,14 +91,38 @@ class ReportService {
     final imageUrls = <String>[];
     final allImages = [...?images, if (image != null) image];
     for (final file in allImages) {
+      if (VideoStorageService.isVideoFile(file)) continue;
       final encoded = await _storage.encodeImage(file);
       if (encoded != null) imageUrls.add(encoded);
     }
+    final videoUrls = <String>[];
+    final allVideos = [
+      ...?videos,
+      if (video != null) video,
+      ...allImages.where(VideoStorageService.isVideoFile),
+    ];
+    final videoStore = VideoStorageService();
+    for (final file in allVideos) {
+      final url = await videoStore.upload(
+        folder: '${user.uid}/reports/${doc.id}',
+        file: file,
+      );
+      videoUrls.add(url);
+    }
+
+    final reporterName =
+        (data['name'] as String?) ??
+        (data['fullName'] as String?) ??
+        user.displayName ??
+        '';
+    final reporterEmail = (data['email'] as String?) ?? user.email ?? '';
+    final reporterPhone = (data['phone'] as String?) ?? '';
+    final citizenship = data['citizenshipNumber'] as String?;
 
     await doc.set({
       'uid': user.uid,
       'citizenId': user.uid,
-      'citizenName': user.displayName ?? '',
+      'citizenName': isAnonymous ? '' : reporterName,
       'title': title.trim(),
       'description': description.trim(),
       'category': category,
@@ -106,9 +134,9 @@ class ReportService {
       'assignedWorkerNames': <String>[],
       'inspectionItems': <Map<String, dynamic>>[],
       'imageUrl': imageUrls.isNotEmpty ? imageUrls.first : null,
-      'videoUrl': null,
+      'videoUrl': videoUrls.isNotEmpty ? videoUrls.first : null,
       'imageUrls': imageUrls,
-      'videoUrls': <String>[],
+      'videoUrls': videoUrls,
       'latitude': latitude,
       'longitude': longitude,
       'locationTimestamp': locationTimestamp,
@@ -121,6 +149,16 @@ class ReportService {
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     });
+    if (isAnonymous) {
+      await doc.collection('private').doc('identity').set({
+        'uid': user.uid,
+        'name': reporterName,
+        'email': reporterEmail,
+        'phone': reporterPhone,
+        'citizenshipNumber': citizenship,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    }
     await _addTimeline(
       reportId: doc.id,
       action: 'submitted',
@@ -133,20 +171,49 @@ class ReportService {
       actorRole: UserRole.public,
     );
     await _notifyOfficials(
-      title: 'New civic report',
-      body: '$category report submitted in ${municipality ?? 'your area'}.',
+      title: isAnonymous ? 'New anonymous civic report' : 'New civic report',
+      body: isAnonymous
+          ? 'An anonymous $category report was submitted in ${municipality ?? 'your area'}.'
+          : '$category report submitted in ${municipality ?? 'your area'}.',
       relatedId: doc.id,
     );
   }
 
+  // Admin-only: real name of an anonymous reporter (private identity doc).
+  Future<ReporterIdentity?> fetchReporterIdentity(ReportIssue report) async {
+    if (!report.isAnonymous) {
+      return ReporterIdentity(
+        uid: report.uid,
+        name: report.citizenName ?? '',
+        email: '',
+        phone: '',
+      );
+    }
+    try {
+      final doc = await _reports
+          .doc(report.id)
+          .collection('private')
+          .doc('identity')
+          .get();
+      final data = doc.data();
+      if (!doc.exists || data == null) return null;
+      return ReporterIdentity.fromMap(data);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // Reports this public user submitted.
   Stream<List<ReportIssue>> watchMyReports(String uid) {
     return _reports.where('uid', isEqualTo: uid).snapshots().map(_mapReports);
   }
 
+  // All reports (official and admin dashboards).
   Stream<List<ReportIssue>> watchAllReports() {
     return _reports.snapshots().map(_mapReports);
   }
 
+  // Jobs assigned to this worker (new crew list or old single worker field).
   Stream<List<ReportIssue>> watchAssignedReports(String workerId) {
     final controller = StreamController<List<ReportIssue>>();
     var fromCrew = <ReportIssue>[];
@@ -196,6 +263,7 @@ class ReportService {
     return controller.stream;
   }
 
+  // Reports the public chose to show on the community feed.
   Stream<List<ReportIssue>> watchPublicFeed() {
     return _reports
         .where('publishedToFeed', isEqualTo: true)
@@ -230,6 +298,7 @@ class ReportService {
     return items;
   }
 
+  // Change the report status string in Firestore and add a timeline row.
   Future<void> updateStatus(
     String reportId,
     String status, {
@@ -246,21 +315,25 @@ class ReportService {
     );
   }
 
+  // Official accepts or declines. Accepted reports notify the public user.
   Future<void> officialDecision({
     required ReportIssue report,
     required String status,
     String? reason,
   }) async {
     await updateStatus(report.id, status, message: reason);
-    await _notifications.send(
-      recipientUid: report.uid,
-      title: status == ReportStatus.officialDeclined
-          ? 'Report declined'
-          : 'Report accepted',
-      body: reason ?? 'An official reviewed your report.',
-      type: 'report_status',
-      relatedId: report.id,
-    );
+    if (status == ReportStatus.officialAccepted) {
+      await _notifications.send(
+        recipientUid: report.uid,
+        title: 'Report accepted',
+        body:
+            reason?.trim().isNotEmpty == true
+                ? reason!.trim()
+                : 'An official accepted ${report.publicId}. Work can now move forward.',
+        type: AlertType.reportAccepted,
+        relatedId: report.id,
+      );
+    }
     await _audit.log(
       action: 'official_report_decision',
       targetType: 'report',
@@ -286,13 +359,6 @@ class ReportService {
       action: 'duplicate',
       message: explanation,
     );
-    await _notifications.send(
-      recipientUid: report.uid,
-      title: 'Report marked as duplicate',
-      body: explanation,
-      type: 'report_status',
-      relatedId: report.id,
-    );
   }
 
   Future<void> assignWorker({
@@ -307,25 +373,49 @@ class ReportService {
     );
   }
 
+  // Official assigns one or more workers. Their uids go on the report document.
   Future<void> assignWorkers({
     required String reportId,
     required List<String> workerIds,
     required List<String> workerNames,
+    ReportIssue? report,
   }) async {
     final ids = <String>[];
     final names = <String>[];
+    void addCrew(String id, String name) {
+      final uid = id.trim();
+      if (uid.isEmpty || ids.contains(uid)) return;
+      ids.add(uid);
+      names.add(name.trim().isEmpty ? 'Worker' : name.trim());
+    }
+
+    if (report != null) {
+      for (var i = 0; i < report.crewIds.length; i++) {
+        addCrew(
+          report.crewIds[i],
+          i < report.crewNames.length ? report.crewNames[i] : 'Worker',
+        );
+      }
+    }
+    final alreadyAssigned = {...ids};
     for (var i = 0; i < workerIds.length; i++) {
-      final id = workerIds[i].trim();
-      if (id.isEmpty || ids.contains(id)) continue;
-      ids.add(id);
-      names.add(
-        i < workerNames.length && workerNames[i].trim().isNotEmpty
-            ? workerNames[i].trim()
-            : 'Worker',
+      addCrew(
+        workerIds[i],
+        i < workerNames.length ? workerNames[i] : 'Worker',
       );
     }
     if (ids.isEmpty) {
       throw const AuthReportFailure('Assign at least one worker.');
+    }
+    final addedNames = <String>[];
+    for (var i = 0; i < ids.length; i++) {
+      if (!alreadyAssigned.contains(ids[i])) addedNames.add(names[i]);
+    }
+    final addingMore = alreadyAssigned.isNotEmpty;
+    if (addingMore && addedNames.isEmpty) {
+      throw const AuthReportFailure(
+        'Select at least one extra worker to add to this task.',
+      );
     }
     await _reports.doc(reportId).update({
       'assignedWorkerId': ids.first,
@@ -333,26 +423,19 @@ class ReportService {
       'assignedWorkerName': names.first,
       'assignedWorkerIds': ids,
       'assignedWorkerNames': names,
-      'status': ReportStatus.workerAssigned,
+      if (!addingMore) 'status': ReportStatus.workerAssigned,
       'updatedAt': FieldValue.serverTimestamp(),
     });
     await _addTimeline(
       reportId: reportId,
-      action: 'worker_assigned',
-      message: 'Assigned to ${names.join(', ')}',
+      action: addingMore ? 'worker_added' : 'worker_assigned',
+      message: addingMore
+          ? 'Added ${addedNames.join(', ')} to the crew'
+          : 'Assigned to ${names.join(', ')}',
     );
-    for (final id in ids) {
-      await _notifications.send(
-        recipientUid: id,
-        title: 'Inspection assigned',
-        body:
-            'Crew of ${ids.length}: go to the reported spot, inspect, and submit evidence.',
-        type: 'assignment',
-        relatedId: reportId,
-      );
-    }
   }
 
+  // Worker records valid/fake, photos, and material prices on the report.
   Future<void> submitInspection({
     required ReportIssue report,
     required String decision,
@@ -367,9 +450,28 @@ class ReportService {
       throw FirebaseAuthException(code: 'user-not-found');
     }
     final imageUrls = <String>[];
+    final videoUrls = <String>[];
+    final videoStore = VideoStorageService();
     for (final file in evidenceImages) {
-      final encoded = await _storage.encodeImage(file, maxWidth: 360);
-      if (encoded != null) imageUrls.add(encoded);
+      if (VideoStorageService.isVideoFile(file)) {
+        videoUrls.add(
+          await videoStore.upload(
+            folder: '${_auth.currentUser!.uid}/inspections/${report.id}',
+            file: file,
+          ),
+        );
+      } else {
+        final encoded = await _storage.encodeImage(file, maxWidth: 360);
+        if (encoded != null) imageUrls.add(encoded);
+      }
+    }
+    for (final file in evidenceVideos) {
+      videoUrls.add(
+        await videoStore.upload(
+          folder: '${_auth.currentUser!.uid}/inspections/${report.id}',
+          file: file,
+        ),
+      );
     }
     final status = switch (decision) {
       'fake' => ReportStatus.verifiedFake,
@@ -382,7 +484,7 @@ class ReportService {
       'workerVerification': decision,
       'workerVerificationReason': reason,
       'workerEvidenceImages': imageUrls,
-      'workerEvidenceVideos': <String>[],
+      'workerEvidenceVideos': videoUrls,
       'inspectionLatitude': latitude,
       'inspectionLongitude': longitude,
       'inspectionItems': budgetItems,
@@ -397,16 +499,6 @@ class ReportService {
       action: 'inspection',
       message: '$decision: $reason',
     );
-    if (status == ReportStatus.verifiedFake) {
-      await _notifications.send(
-        recipientUid: report.uid,
-        title: 'Report flagged',
-        body:
-            'A worker marked ${report.publicId} as suspected fake. An official will review it.',
-        type: 'report_status',
-        relatedId: report.id,
-      );
-    }
     await _notifyOfficials(
       title: 'Worker inspection submitted',
       body: '${report.publicId} marked $decision.',
@@ -430,6 +522,7 @@ class ReportService {
     );
   }
 
+  // Official confirms a fake report and blacklists that public user.
   Future<void> confirmFakeAndBlacklist({
     required ReportIssue report,
     required String reason,
@@ -452,13 +545,6 @@ class ReportService {
       'blacklistedAt': FieldValue.serverTimestamp(),
       'status': 'active',
     });
-    await _notifications.send(
-      recipientUid: report.uid,
-      title: 'Account restricted',
-      body: 'A report was confirmed fake. You cannot submit new reports.',
-      type: 'blacklist',
-      relatedId: report.id,
-    );
     await _audit.log(
       action: 'blacklist_confirmed',
       targetType: 'user',
@@ -467,6 +553,47 @@ class ReportService {
     );
   }
 
+    // Photos are stored in reports/{id}/completionPhotos so the parent stays under 1MB.
+    CollectionReference<Map<String, dynamic>> _completionPhotos(String reportId) {
+      return _reports.doc(reportId).collection('completionPhotos');
+    }
+
+    // Read completion photo URLs once.
+    Future<List<String>> fetchCompletionPhotos(String reportId) async {
+      try {
+        final snapshot = await _completionPhotos(reportId).get();
+        final urls = snapshot.docs
+            .map((doc) => (doc.data()['imageUrl'] as String?) ?? '')
+            .where((url) => url.isNotEmpty)
+            .toList();
+        return urls;
+      } catch (_) {
+        return const [];
+      }
+    }
+
+    // Live list of completion photos for the official details screen.
+    Stream<List<String>> watchCompletionPhotos(String reportId) {
+      return Stream<List<String>>.multi((controller) {
+        final sub = _completionPhotos(reportId).snapshots().listen(
+          (snapshot) {
+            if (controller.isClosed) return;
+            controller.add(
+              snapshot.docs
+                  .map((doc) => (doc.data()['imageUrl'] as String?) ?? '')
+                  .where((url) => url.isNotEmpty)
+                  .toList(),
+            );
+          },
+          onError: (Object _) {
+            if (!controller.isClosed) controller.add(const <String>[]);
+          },
+        );
+        controller.onCancel = sub.cancel;
+      });
+    }
+
+  // Worker marks work done and saves small completion photos in a subcollection.
   Future<void> completeReport({
     required String reportId,
     XFile? proofImage,
@@ -479,18 +606,37 @@ class ReportService {
       throw FirebaseAuthException(code: 'user-not-found');
     }
     final files = [...proofImages, if (proofImage != null) proofImage];
+    if (files.isEmpty) {
+      throw const AuthReportFailure('Add at least one finished-work photo.');
+    }
     final urls = <String>[];
-    for (final file in files) {
-      final encoded = await _storage.encodeImage(file, maxWidth: 480);
+    for (final file in files.take(2)) {
+      final encoded = await _storage.encodeImage(
+        file,
+        maxWidth: 220,
+        maxBytes: 45000,
+      );
       if (encoded != null) urls.add(encoded);
+    }
+    if (urls.isEmpty) {
+      throw const AuthReportFailure(
+        'Those photos could not be saved. Try a smaller photo.',
+      );
+    }
+    for (final url in urls) {
+      await _completionPhotos(reportId).add({
+        'imageUrl': url,
+        'workerId': _auth.currentUser?.uid,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
     }
     await _reports.doc(reportId).update({
       'status': ReportStatus.workCompleted,
-      'proofImageUrl': urls.isEmpty ? null : urls.first,
-      'completionImages': urls,
       'completionDescription': description,
       'completionLatitude': latitude,
       'completionLongitude': longitude,
+      'workerCompletionSubmitted': true,
+      'hasCompletionPhotos': true,
       'updatedAt': FieldValue.serverTimestamp(),
     });
     await _addTimeline(
@@ -498,9 +644,22 @@ class ReportService {
       action: 'work_completed',
       message: description ?? 'Worker submitted completion evidence',
     );
+    try {
+      final tasks = await _firestore
+          .collection('tasks')
+          .where('reportId', isEqualTo: reportId)
+          .get();
+      for (final doc in tasks.docs) {
+        await doc.reference.update({
+          'status': TaskStatus.completed,
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      }
+    } catch (_) {}
     await _notifyOfficials(
-      title: 'Completed photos to review',
-      body: 'A worker sent finished-work photos for $reportId. Send them to the public when you approve.',
+      title: 'Completed work to review',
+      body:
+          'A worker sent finished-work photos. Open Completed on Reports and send them to the public when you approve.',
       relatedId: reportId,
     );
   }
@@ -509,11 +668,17 @@ class ReportService {
     return shareCompletionWithPublic(report);
   }
 
+  // Official shares finished photos with the public reporter.
   Future<void> shareCompletionWithPublic(ReportIssue report) async {
-    final hasPhotos =
-        report.completionImages.isNotEmpty ||
-        (report.proofImageUrl != null && report.proofImageUrl!.isNotEmpty);
-    if (!hasPhotos) {
+    var photos = [
+      ...report.completionImages,
+      if (report.proofImageUrl != null && report.proofImageUrl!.isNotEmpty)
+        report.proofImageUrl!,
+    ];
+    if (photos.isEmpty) {
+      photos = await fetchCompletionPhotos(report.id);
+    }
+    if (photos.isEmpty && !report.hasCompletionPhotos) {
       throw const AuthReportFailure(
         'The worker has not sent completed-work photos yet.',
       );
@@ -529,16 +694,9 @@ class ReportService {
       action: 'completion_shared',
       message: 'Official sent completed photos to the public reporter',
     );
-    await _notifications.send(
-      recipientUid: report.uid,
-      title: 'Before & after ready',
-      body:
-          'Completed photos for ${report.publicId} are ready. Post them on the same feed item to compare before and after.',
-      type: 'completed',
-      relatedId: report.id,
-    );
   }
 
+  // Public user posts this report on the feed with a caption.
   Future<void> publishToFeed({
     required ReportIssue report,
     required bool anonymous,
@@ -572,6 +730,9 @@ class ReportService {
       'text': body,
       'caption': captionText,
       'isAnonymous': anonymous,
+      'imageUrl': report.imageUrl,
+      'videoUrl': report.videoUrl,
+      'videoUrls': report.videoUrls,
       'updatedAt': FieldValue.serverTimestamp(),
     };
     var postId = report.feedPostId;
@@ -604,6 +765,9 @@ class ReportService {
         'text': body,
         'caption': captionText,
         'isAnonymous': anonymous,
+        'imageUrl': report.imageUrl,
+        'videoUrl': report.videoUrl,
+        'videoUrls': report.videoUrls,
         'approvedBudgetAmount': report.approvedBudgetAmount,
         'likedBy': <String>[],
         'commentCount': 0,
@@ -630,6 +794,7 @@ class ReportService {
     } catch (_) {}
   }
 
+  // Add a comment on a report (legacy comments collection on the report).
   Future<void> addComment({
     required String reportId,
     required String text,
@@ -642,6 +807,7 @@ class ReportService {
     });
   }
 
+  // History of status changes under reports/{id}/timeline.
   Future<void> _addTimeline({
     required String reportId,
     required String action,
@@ -656,6 +822,7 @@ class ReportService {
     });
   }
 
+  // Send the same alert to every user whose role is official.
   Future<void> _notifyOfficials({
     required String title,
     required String body,
@@ -678,7 +845,7 @@ class ReportService {
           recipientUid: doc.id,
           title: title,
           body: body,
-          type: 'report',
+          type: AlertType.report,
           relatedId: relatedId,
         );
       }

@@ -1,9 +1,13 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 
+import 'package:hamro_fix/core/constants/app_constants.dart';
+import 'package:hamro_fix/core/l10n/app_locale.dart';
+import 'package:hamro_fix/core/platform/app_target.dart';
+import 'package:hamro_fix/screens/auth/use_correct_app_page.dart';
 import 'package:hamro_fix/services/auth_messages.dart';
+import 'package:hamro_fix/widgets/xfile_preview.dart';
 import 'package:hamro_fix/services/auth_services.dart';
 
 // ── Worker Signup Page ───────────────────────────────────────────────────────
@@ -24,25 +28,23 @@ class _WorkerSignupPageState extends State<WorkerSignupPage>
   final _fullNameController = TextEditingController();
   final _emailController = TextEditingController();
   final _phoneController = TextEditingController();
-  final _passwordController = TextEditingController();
   final _citizenshipController = TextEditingController();
   final _experienceController = TextEditingController();
 
   // State
   bool _isEnglish = true;
-  bool _obscurePassword = true;
   bool _attempted = false;
   bool _isSubmitting = false;
   DateTime? _selectedDate;
   String? _selectedGender;
   String? _selectedDistrict;
   String? _selectedMunicipality;
-  String? _selectedSpecialization;
+  final Set<String> _selectedSpecialties = {};
 
   // Photos
-  File? _passportPhoto;
-  File? _citizenshipFront;
-  File? _citizenshipBack;
+  XFile? _passportPhoto;
+  XFile? _citizenshipFront;
+  XFile? _citizenshipBack;
   final ImagePicker _picker = ImagePicker();
 
   // Animations
@@ -58,19 +60,6 @@ class _WorkerSignupPageState extends State<WorkerSignupPage>
   static const Color accentOrange = Color(0xFFE65100);
 
   // Data
-  final List<String> _specializations = [
-    'Plumber / प्लम्बर',
-    'Electrician / इलेक्ट्रिसियन',
-    'Road Repair / सडक मर्मत',
-    'Garbage Collection / फोहोर संकलन',
-    'Water Supply / पानी आपूर्ति',
-    'Sewage / ढल व्यवस्थापन',
-    'Construction / निर्माण',
-    'Carpenter / सिकर्मी',
-    'Painter / रंगकर्मी',
-    'Other / अन्य',
-  ];
-
   final List<String> _genders = [
     'Male / पुरुष',
     'Female / महिला',
@@ -119,6 +108,7 @@ class _WorkerSignupPageState extends State<WorkerSignupPage>
   @override
   void initState() {
     super.initState();
+    _isEnglish = AppLocale.instance.isEnglish;
     _fadeController = AnimationController(
       duration: const Duration(milliseconds: 500),
       vsync: this,
@@ -153,7 +143,6 @@ class _WorkerSignupPageState extends State<WorkerSignupPage>
     _fullNameController.dispose();
     _emailController.dispose();
     _phoneController.dispose();
-    _passwordController.dispose();
     _citizenshipController.dispose();
     _experienceController.dispose();
     super.dispose();
@@ -167,9 +156,9 @@ class _WorkerSignupPageState extends State<WorkerSignupPage>
     );
     if (file == null) return;
     setState(() {
-      if (type == 'passport') _passportPhoto = File(file.path);
-      if (type == 'front') _citizenshipFront = File(file.path);
-      if (type == 'back') _citizenshipBack = File(file.path);
+      if (type == 'passport') _passportPhoto = file;
+      if (type == 'front') _citizenshipFront = file;
+      if (type == 'back') _citizenshipBack = file;
     });
   }
 
@@ -213,33 +202,6 @@ class _WorkerSignupPageState extends State<WorkerSignupPage>
       return _isEnglish
           ? 'Enter valid Nepali mobile number (98XXXXXXXX)'
           : 'मान्य नेपाली मोबाइल नम्बर लेख्नुहोस्';
-    }
-    return null;
-  }
-
-  String? _validatePassword(String? v) {
-    if (v == null || v.isEmpty) {
-      return _isEnglish ? 'Password is required' : 'पासवर्ड आवश्यक छ';
-    }
-    if (v.length < 8) {
-      return _isEnglish
-          ? 'Minimum 8 characters required'
-          : 'कम्तीमा ८ अक्षर चाहिन्छ';
-    }
-    if (!RegExp(r'[A-Z]').hasMatch(v)) {
-      return _isEnglish
-          ? 'Add at least one uppercase letter'
-          : 'कम्तीमा एउटा ठूलो अक्षर राख्नुहोस्';
-    }
-    if (!RegExp(r'[0-9]').hasMatch(v)) {
-      return _isEnglish
-          ? 'Add at least one number'
-          : 'कम्तीमा एउटा अंक राख्नुहोस्';
-    }
-    if (!RegExp(r'[!@#\$&*~%^()_\-+=\[\]{}|;:,.<>?]').hasMatch(v)) {
-      return _isEnglish
-          ? 'Add at least one special character'
-          : 'कम्तीमा एउटा विशेष चिन्ह राख्नुहोस्';
     }
     return null;
   }
@@ -319,11 +281,11 @@ class _WorkerSignupPageState extends State<WorkerSignupPage>
   }
 
   bool _validateStep1() {
-    if (_selectedSpecialization == null) {
+    if (_selectedSpecialties.isEmpty) {
       _showSnack(
         _isEnglish
-            ? 'Please select specialization'
-            : 'कृपया विशेषज्ञता छान्नुहोस्',
+            ? 'Please select at least one specialty'
+            : 'कृपया कम्तीमा एक विशेषज्ञता छान्नुहोस्',
       );
       return false;
     }
@@ -362,8 +324,8 @@ class _WorkerSignupPageState extends State<WorkerSignupPage>
     if (_passportPhoto == null) {
       _showSnack(
         _isEnglish
-            ? 'Please upload your passport size photo'
-            : 'कृपया पासपोर्ट साइज फोटो अपलोड गर्नुहोस्',
+            ? 'Please upload your profile photo'
+            : 'कृपया प्रोफाइल फोटो अपलोड गर्नुहोस्',
       );
       return false;
     }
@@ -408,16 +370,26 @@ class _WorkerSignupPageState extends State<WorkerSignupPage>
           fullName: _fullNameController.text,
           email: _emailController.text,
           phone: _phoneController.text,
-          password: _passwordController.text,
           extra: {
             'citizenshipNumber': _citizenshipController.text.trim(),
             'experienceYears': _experienceController.text.trim(),
             'gender': _selectedGender,
             'district': _selectedDistrict,
             'municipality': _selectedMunicipality,
-            'specialization': _selectedSpecialization,
+            'specializations': _selectedSpecialties.toList(),
+            'specialization': _selectedSpecialties.join(', '),
             'dateOfBirth': _selectedDate?.toIso8601String(),
           },
+          passportPhoto: _passportPhoto,
+          citizenshipFront: _citizenshipFront,
+          citizenshipBack: _citizenshipBack,
+        );
+        if (!mounted) return;
+        setState(() => _isSubmitting = false);
+        _showSnack(
+          _isEnglish
+              ? 'Application submitted. After approval you will receive an email to set your password.'
+              : 'आवेदन पठाइयो। स्वीकृतिपछि पासवर्ड सेट गर्न इमेल आउनेछ।',
         );
       } catch (e) {
         if (!mounted) return;
@@ -616,7 +588,7 @@ class _WorkerSignupPageState extends State<WorkerSignupPage>
     required String label,
     required String sublabel,
     required IconData icon,
-    required File? file,
+    required XFile? file,
     required VoidCallback onTap,
     bool showError = false,
   }) {
@@ -641,8 +613,8 @@ class _WorkerSignupPageState extends State<WorkerSignupPage>
                 children: [
                   ClipRRect(
                     borderRadius: BorderRadius.circular(12),
-                    child: Image.file(
-                      file,
+                    child: XFilePreview(
+                      file: file,
                       height: 140,
                       width: double.infinity,
                       fit: BoxFit.cover,
@@ -888,36 +860,11 @@ class _WorkerSignupPageState extends State<WorkerSignupPage>
       ),
       const SizedBox(height: 14),
 
-      TextFormField(
-        controller: _passwordController,
-        obscureText: _obscurePassword,
-        style: const TextStyle(fontSize: 14),
-        validator: _validatePassword,
-        decoration:
-            _inputDecoration(
-              _isEnglish ? 'Password (min 8 chars)' : 'पासवर्ड',
-              Icons.lock_outline_rounded,
-            ).copyWith(
-              suffixIcon: IconButton(
-                icon: Icon(
-                  _obscurePassword
-                      ? Icons.visibility_off_outlined
-                      : Icons.visibility_outlined,
-                  size: 20,
-                  color: Colors.black45,
-                ),
-                onPressed: () =>
-                    setState(() => _obscurePassword = !_obscurePassword),
-              ),
-            ),
-      ),
-      Padding(
-        padding: const EdgeInsets.only(left: 14, top: 5),
+      const Padding(
+        padding: EdgeInsets.only(top: 8),
         child: Text(
-          _isEnglish
-              ? '• Min 8 chars  • 1 uppercase  • 1 number  • 1 special char'
-              : '• कम्तीमा ८ अक्षर  • १ ठूलो अक्षर  • १ अंक  • १ विशेष चिन्ह',
-          style: TextStyle(fontSize: 11, color: darkGreen.withValues(alpha: 0.6)),
+          'No password is set now. After an official approves your application you will receive an email to activate your account.',
+          style: TextStyle(fontSize: 13),
         ),
       ),
       const SizedBox(height: 14),
@@ -998,13 +945,57 @@ class _WorkerSignupPageState extends State<WorkerSignupPage>
     children: [
       _sectionLabel(_isEnglish ? 'Work Details' : 'कार्य विवरण'),
 
-      _buildDropdown(
-        hint: _isEnglish ? 'Select Specialization' : 'विशेषज्ञता छान्नुहोस्',
-        value: _selectedSpecialization,
-        items: _specializations,
-        icon: Icons.construction_outlined,
-        showError: _attempted,
-        onChanged: (val) => setState(() => _selectedSpecialization = val),
+      Text(
+        _isEnglish
+            ? 'Select every specialty you can work on'
+            : 'तपाईंले काम गर्न सक्ने सबै विशेषज्ञता छान्नुहोस्',
+        style: TextStyle(
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+          color: darkGreen.withValues(alpha: 0.8),
+        ),
+      ),
+      const SizedBox(height: 10),
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: _attempted && _selectedSpecialties.isEmpty
+                ? Colors.redAccent
+                : _selectedSpecialties.isEmpty
+                ? Colors.white
+                : darkGreen,
+            width: 2,
+          ),
+        ),
+        child: Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final specialty in WorkerSpecialties.all)
+              FilterChip(
+                label: Text(
+                  WorkerSpecialties.chipLabel(
+                    specialty,
+                    english: _isEnglish,
+                  ),
+                ),
+                selected: _selectedSpecialties.contains(specialty),
+                onSelected: (selected) {
+                  setState(() {
+                    if (selected) {
+                      _selectedSpecialties.add(specialty);
+                    } else {
+                      _selectedSpecialties.remove(specialty);
+                    }
+                  });
+                },
+              ),
+          ],
+        ),
       ),
       const SizedBox(height: 14),
 
@@ -1113,7 +1104,7 @@ class _WorkerSignupPageState extends State<WorkerSignupPage>
 
       // Passport Photo
       Text(
-        _isEnglish ? 'Passport Size Photo' : 'पासपोर्ट साइज फोटो',
+        _isEnglish ? 'Profile photo (passport size)' : 'प्रोफाइल फोटो (पासपोर्ट साइज)',
         style: TextStyle(
           fontSize: 12,
           fontWeight: FontWeight.w600,
@@ -1136,8 +1127,8 @@ class _WorkerSignupPageState extends State<WorkerSignupPage>
           padding: const EdgeInsets.only(left: 14, top: 4),
           child: Text(
             _isEnglish
-                ? 'Passport photo is required'
-                : 'पासपोर्ट फोटो आवश्यक छ',
+                ? 'Profile photo is required'
+                : 'प्रोफाइल फोटो आवश्यक छ',
             style: const TextStyle(fontSize: 11, color: Colors.redAccent),
           ),
         ),
@@ -1241,6 +1232,12 @@ class _WorkerSignupPageState extends State<WorkerSignupPage>
 
   @override
   Widget build(BuildContext context) {
+    if (AppTarget.isWeb) {
+      return const LoginPlatformGuard(
+        staffWebPage: false,
+        child: SizedBox.shrink(),
+      );
+    }
     return Scaffold(
       backgroundColor: bgGreen,
       body: SafeArea(
@@ -1310,7 +1307,10 @@ class _WorkerSignupPageState extends State<WorkerSignupPage>
                       ),
                       // Language toggle
                       GestureDetector(
-                        onTap: () => setState(() => _isEnglish = !_isEnglish),
+                        onTap: () => setState(() {
+                          _isEnglish = !_isEnglish;
+                          AppLocale.instance.setEnglish(_isEnglish);
+                        }),
                         child: Container(
                           padding: const EdgeInsets.symmetric(
                             horizontal: 12,

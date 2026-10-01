@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'package:hamro_fix/core/l10n/app_locale.dart';
+import 'package:hamro_fix/core/platform/app_target.dart';
 import 'package:hamro_fix/models/public_model.dart';
 import 'package:hamro_fix/screens/auth/landing_page.dart';
+import 'package:hamro_fix/screens/auth/use_correct_app_page.dart';
 import 'package:hamro_fix/screens/auth/public/public_signup.dart';
 import 'package:hamro_fix/services/auth_messages.dart';
 import 'package:hamro_fix/services/auth_services.dart';
@@ -23,6 +26,12 @@ class _PublicLoginPageState extends State<PublicLoginPage> {
   bool _obscurePassword = true;
   bool _usePhone = false;
   bool _isLoading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _isEnglish = AppLocale.instance.isEnglish;
+  }
 
   @override
   void dispose() {
@@ -137,6 +146,12 @@ class _PublicLoginPageState extends State<PublicLoginPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (AppTarget.isWeb) {
+      return const LoginPlatformGuard(
+        staffWebPage: false,
+        child: SizedBox.shrink(),
+      );
+    }
     return Theme(
       data: kHamroFixLightGreenTheme,
       child: Builder(
@@ -158,7 +173,7 @@ class _PublicLoginPageState extends State<PublicLoginPage> {
                 onPressed: _navigateBackToLanding,
               ),
               title: Text(
-                _isEnglish ? 'Citizen Login' : 'नागरिक लगइन',
+                _isEnglish ? 'Public Login' : 'सार्वजनिक लगइन',
                 style: theme.textTheme.titleMedium?.copyWith(
                   fontWeight: FontWeight.w700,
                   color: colorScheme.onSurface,
@@ -167,22 +182,24 @@ class _PublicLoginPageState extends State<PublicLoginPage> {
               actions: [
                 Padding(
                   padding: const EdgeInsets.only(right: 14),
-                  child: TextButton.icon(
+                  child: TextButton(
                     onPressed: () {
                       HapticFeedback.selectionClick();
-                      setState(() => _isEnglish = !_isEnglish);
+                      setState(() {
+                        _isEnglish = !_isEnglish;
+                        AppLocale.instance.setEnglish(_isEnglish);
+                      });
                     },
-                    icon: const Icon(Icons.language_rounded, size: 18),
-                    label: Text(
+                    style: TextButton.styleFrom(
+                      foregroundColor: colorScheme.primary,
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    child: Text(
                       _isEnglish ? 'नेपाली' : 'English',
                       style: const TextStyle(
                         fontWeight: FontWeight.bold,
                         fontSize: 13,
                       ),
-                    ),
-                    style: TextButton.styleFrom(
-                      foregroundColor: colorScheme.primary,
-                      visualDensity: VisualDensity.compact,
                     ),
                   ),
                 ),
@@ -223,7 +240,7 @@ class _PublicLoginPageState extends State<PublicLoginPage> {
                             const SizedBox(height: 4),
                             Text(
                               _isEnglish
-                                  ? 'Public Citizen Problem Reporting'
+                                  ? 'Public problem reporting'
                                   : 'सार्वजनिक नागरिक समस्या रिपोर्टिङ पोर्टल',
                               style: theme.textTheme.bodySmall?.copyWith(
                                 color: colorScheme.onSurfaceVariant,
@@ -356,7 +373,7 @@ class _PublicLoginPageState extends State<PublicLoginPage> {
                               : (_isEnglish ? 'Email Address' : 'इमेल ठेगाना'),
                           hintText: _usePhone
                               ? '98XXXXXXXX'
-                              : 'citizen@example.com',
+                              : 'public@example.com',
                           prefixIcon: Icon(
                             _usePhone
                                 ? Icons.phone_android_rounded

@@ -15,6 +15,31 @@ class AppLocale extends ChangeNotifier {
   }
 
   String t(String english, String nepali) => isEnglish ? english : nepali;
+
+  String category(String english) => t(english, _categoryNp[english] ?? english);
+
+  static const _categoryNp = {
+    'Pothole / Road Damage': 'खाल्डो / सडक क्षति',
+    'Drainage / Flooding': 'ढल / बाढी',
+    'Street Light': 'सडक बत्ती',
+    'Waste Management': 'फोहोर व्यवस्थापन',
+    'Water Supply': 'खानेपानी',
+    'Public Infrastructure': 'सार्वजनिक पूर्वाधार',
+    'Road Sign': 'सडक संकेत',
+    'Footpath': 'फुटपाथ',
+    'Traffic Issue': 'ट्राफिक समस्या',
+    'Other': 'अन्य',
+  };
+}
+
+class LocaleScope extends InheritedNotifier<AppLocale> {
+  LocaleScope({super.key, required super.child})
+    : super(notifier: AppLocale.instance);
+
+  static AppLocale of(BuildContext context) {
+    context.dependOnInheritedWidgetOfExactType<LocaleScope>();
+    return AppLocale.instance;
+  }
 }
 
 class LanguageToggle extends StatelessWidget {

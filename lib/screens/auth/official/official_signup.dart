@@ -2,13 +2,16 @@
 // HamroFix - Official Access Request (invite / admin-issued accounts)
 // ============================================================================
 
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 
 import 'package:hamro_fix/core/l10n/app_locale.dart';
+import 'package:hamro_fix/core/platform/app_target.dart';
+import 'package:hamro_fix/screens/auth/use_correct_app_page.dart';
+import 'package:hamro_fix/widgets/staff_auth_shell.dart';
+import 'package:hamro_fix/widgets/web_narrow_body.dart';
+import 'package:hamro_fix/widgets/xfile_preview.dart';
 import 'package:hamro_fix/screens/auth/landing_page.dart';
 import 'package:hamro_fix/screens/auth/official/official_login.dart';
 import 'package:hamro_fix/services/auth_messages.dart';
@@ -259,109 +262,51 @@ class _OfficialSignupPageState extends State<OfficialSignupPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFF6FBF6),
-      appBar: AppBar(
-        backgroundColor: const Color(0xFFF6FBF6),
-        surfaceTintColor: Colors.transparent,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_rounded, color: Colors.black87),
-          tooltip: _isEnglish
-              ? 'Back to Landing Page'
-              : 'गृहपृष्ठमा फर्कनुहोस्',
-          onPressed: _navigateBackToLanding,
-        ),
-        title: Text(
-          _isEnglish ? 'Official Registration' : 'आधिकारिक दर्ता',
-          style: const TextStyle(
-            fontWeight: FontWeight.w700,
-            fontSize: 18,
-            color: Colors.black87,
-          ),
-        ),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 12),
-            child: TextButton.icon(
-              onPressed: () {
-                HapticFeedback.selectionClick();
-                setState(() {
-                  _isEnglish = !_isEnglish;
-                  AppLocale.instance.setEnglish(_isEnglish);
-                });
-              },
-              icon: const Icon(Icons.language_rounded, size: 18),
-              label: Text(
-                _isEnglish ? 'नेपाली' : 'English',
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 13,
-                ),
-              ),
-              style: TextButton.styleFrom(
-                foregroundColor: const Color(0xFF2E7D32),
-                visualDensity: VisualDensity.compact,
-              ),
-            ),
-          ),
-        ],
-      ),
-      body: SafeArea(
-        child: SingleChildScrollView(
+    if (AppTarget.isMobileApp) {
+      return const LoginPlatformGuard(
+        staffWebPage: true,
+        child: SizedBox.shrink(),
+      );
+    }
+    return StaffAuthShell(
+      onBack: _navigateBackToLanding,
+      child: SafeArea(
+        child: WebNarrowBody(
+          maxWidth: 520,
+          child: SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(24, 8, 24, 32),
           child: Form(
             key: _formKey,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Center(
-                  child: Column(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFE8F5E9),
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(
-                            color: const Color(0xFFA5D6A7),
-                            width: 1.2,
-                          ),
-                        ),
-                        child: Image.asset(
-                          'assets/images/logo.png',
-                          height: 46,
-                          width: 46,
-                          errorBuilder: (_, __, ___) => const Icon(
-                            Icons.admin_panel_settings_rounded,
-                            size: 46,
-                            color: Color(0xFF2E7D32),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      Text(
-                        _isEnglish ? 'Official Account' : 'आधिकारिक खाता',
-                        style: const TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.w800,
-                          color: Colors.black87,
-                          letterSpacing: -0.5,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        _isEnglish
-                            ? 'Request administrative & official access'
-                            : 'प्रशासकीय तथा आधिकारिक पहुँचको लागि अनुरोध गर्नुहोस्',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey.shade700,
-                        ),
-                      ),
-                    ],
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton(
+                    onPressed: () {
+                      HapticFeedback.selectionClick();
+                      setState(() {
+                        _isEnglish = !_isEnglish;
+                        AppLocale.instance.setEnglish(_isEnglish);
+                      });
+                    },
+                    child: Text(_isEnglish ? 'नेपाली' : 'English'),
                   ),
+                ),
+                Text(
+                  _isEnglish ? 'Official Registration' : 'आधिकारिक दर्ता',
+                  style: const TextStyle(
+                    fontSize: 26,
+                    fontWeight: FontWeight.w800,
+                    color: Color(0xFF1A3D1A),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  _isEnglish
+                      ? 'Request official access. A profile photo is required.'
+                      : 'आधिकारिक पहुँच अनुरोध गर्नुहोस्। प्रोफाइल तस्बिर अनिवार्य छ।',
+                  style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
                 ),
                 const SizedBox(height: 20),
                 Container(
@@ -438,20 +383,20 @@ class _OfficialSignupPageState extends State<OfficialSignupPage> {
                       );
                       if (file != null) setState(() => _profileImage = file);
                     },
-                    child: CircleAvatar(
-                      radius: 46,
-                      backgroundColor: const Color(0xFFE8F5E9),
-                      backgroundImage: _profileImage == null
-                          ? null
-                          : FileImage(File(_profileImage!.path)),
-                      child: _profileImage == null
-                          ? const Icon(
+                    child: _profileImage == null
+                        ? CircleAvatar(
+                            radius: 46,
+                            backgroundColor: const Color(0xFFE8F5E9),
+                            child: const Icon(
                               Icons.camera_alt_outlined,
                               color: Color(0xFF2E7D32),
                               size: 28,
-                            )
-                          : null,
-                    ),
+                            ),
+                          )
+                        : XFileCircleImage(
+                            file: _profileImage!,
+                            radius: 46,
+                          ),
                   ),
                 ),
                 const SizedBox(height: 8),
@@ -582,6 +527,7 @@ class _OfficialSignupPageState extends State<OfficialSignupPage> {
               ],
             ),
           ),
+        ),
         ),
       ),
     );

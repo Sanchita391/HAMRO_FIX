@@ -2,6 +2,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'package:hamro_fix/core/constants/app_constants.dart';
 
+// Dart classes that match Firestore documents (users, reports, feed, budgets).
+
+// The four app roles stored on users/{uid}.role
 class UserRole {
   static const String public = 'public';
   static const String official = 'official';
@@ -30,6 +33,7 @@ class UserRole {
   static bool isKnown(String? role) => all.contains(normalize(role));
 }
 
+// One row from the Firestore "users" collection.
 class UserProfile {
   final String uid;
   final String name;
@@ -41,6 +45,7 @@ class UserProfile {
   final String? accountStatus;
   final String? profileImageUrl;
   final String? specialization;
+  final List<String> specializations;
   final String? district;
   final String? municipality;
   final String? department;
@@ -62,6 +67,7 @@ class UserProfile {
     this.accountStatus,
     this.profileImageUrl,
     this.specialization,
+    this.specializations = const [],
     this.district,
     this.municipality,
     this.department,
@@ -75,6 +81,7 @@ class UserProfile {
 
   String? get normalizedRole => UserRole.normalize(role);
 
+  // Combine role and roles[] so old documents still work.
   List<String> get assignedRoles {
     final fromList = roles
         .map(UserRole.normalize)
@@ -89,7 +96,19 @@ class UserProfile {
   }
 
   bool hasRole(String value) {
-    return UserRole.normalize(value) == normalizedRole;
+    return assignedRoles.contains(UserRole.normalize(value));
+  }
+
+  bool get canComposeAlerts =>
+      hasRole(UserRole.worker) ||
+      hasRole(UserRole.official) ||
+      hasRole(UserRole.admin);
+
+  String get staffRole {
+    if (hasRole(UserRole.admin)) return UserRole.admin;
+    if (hasRole(UserRole.official)) return UserRole.official;
+    if (hasRole(UserRole.worker)) return UserRole.worker;
+    return normalizedRole ?? '';
   }
 
   String get status {
@@ -102,6 +121,7 @@ class UserProfile {
   bool get isPending => status == 'pending';
   bool get isRejected => status == 'rejected';
   bool get isBlacklisted => status == 'blacklisted';
+  // Cannot use the app until admin/official lifts this.
   bool get isRestricted =>
       isBlacklisted ||
       status == 'suspended' ||
@@ -121,6 +141,11 @@ class UserProfile {
     return 'User';
   }
 
+  String get specialtyLabel {
+    if (specializations.isNotEmpty) return specializations.join(', ');
+    return (specialization ?? '').trim();
+  }
+
   factory UserProfile.fromFirestore(
     DocumentSnapshot<Map<String, dynamic>> doc,
   ) {
@@ -128,8 +153,13 @@ class UserProfile {
     return UserProfile.fromMap(doc.id, data);
   }
 
+  // Build a profile from a map of Firestore fields.
   factory UserProfile.fromMap(String uid, Map<String, dynamic> data) {
     final createdAt = data['createdAt'];
+    final specs = WorkerSpecialties.fromFirestore(
+      data['specializations'],
+      data['specialization'] as String?,
+    );
     return UserProfile(
       uid: (data['uid'] as String?) ?? uid,
       name: (data['name'] as String?) ?? (data['fullName'] as String?) ?? '',
@@ -140,7 +170,10 @@ class UserProfile {
       approvalStatus: data['approvalStatus'] as String?,
       accountStatus: data['accountStatus'] as String?,
       profileImageUrl: data['profileImageUrl'] as String?,
-      specialization: data['specialization'] as String?,
+      specialization: specs.isNotEmpty
+          ? specs.join(', ')
+          : data['specialization'] as String?,
+      specializations: specs,
       district: data['district'] as String?,
       municipality: data['municipality'] as String?,
       department: data['department'] as String?,
@@ -156,6 +189,7 @@ class UserProfile {
   }
 }
 
+// One civic issue in the "reports" collection.
 class ReportIssue {
   final String id;
   final String uid;
@@ -183,19 +217,24 @@ class ReportIssue {
   final bool budgetSharedWithPublic;
   final bool publishedBudgetToFeed;
   final bool completionSharedWithPublic;
+  final bool workerCompletionSubmitted;
+  final bool hasCompletionPhotos;
   final bool publishedAfterToFeed;
   final String? feedPostId;
   final String? workerVerification;
   final String? workerVerificationReason;
   final List<String> workerEvidenceImages;
+  final List<String> workerEvidenceVideos;
   final List<Map<String, dynamic>> inspectionItems;
   final List<String> inspectedByIds;
   final List<String> completionImages;
   final double itemsSubtotal;
   final double workerExpectedPayment;
   final int expectedWorkDays;
+  final String? budgetStatus;
   final double? approvedBudgetAmount;
   final String? trackingCode;
+  final String? citizenName;
   final DateTime? createdAt;
   final DateTime? locationTimestamp;
 
@@ -226,25 +265,57 @@ class ReportIssue {
     this.budgetSharedWithPublic = false,
     this.publishedBudgetToFeed = false,
     this.completionSharedWithPublic = false,
+    this.workerCompletionSubmitted = false,
+    this.hasCompletionPhotos = false,
     this.publishedAfterToFeed = false,
     this.feedPostId,
     this.workerVerification,
     this.workerVerificationReason,
     this.workerEvidenceImages = const [],
+    this.workerEvidenceVideos = const [],
     this.inspectionItems = const [],
     this.inspectedByIds = const [],
     this.completionImages = const [],
     this.itemsSubtotal = 0,
     this.workerExpectedPayment = 0,
     this.expectedWorkDays = 0,
+    this.budgetStatus,
     this.approvedBudgetAmount,
     this.trackingCode,
+    this.citizenName,
     this.createdAt,
     this.locationTimestamp,
   });
 
   bool get hasLocation => latitude != null && longitude != null;
 
+  String? get playableVideoUrl {
+    final primary = (videoUrl ?? '').trim();
+    if (primary.isNotEmpty) return primary;
+    for (final item in videoUrls) {
+      if (item.trim().isNotEmpty) return item.trim();
+    }
+    return null;
+  }
+
+  bool get hasPlayableVideo => playableVideoUrl != null;
+
+  // Money used for worker salary (15% of this) after admin approval.
+  double get taskBudget {
+    if (approvedBudgetAmount != null && approvedBudgetAmount! > 0) {
+      return approvedBudgetAmount!;
+    }
+    if (itemsSubtotal > 0) return itemsSubtotal;
+    var total = 0.0;
+    for (final item in inspectionItems) {
+      final qty = (item['quantity'] as num?)?.toDouble() ?? 0;
+      final unit = (item['unitCost'] as num?)?.toDouble() ?? 0;
+      total += qty * unit;
+    }
+    return total;
+  }
+
+  // Worker uids on this report (list field, or the older single id).
   List<String> get crewIds {
     if (assignedWorkerIds.isNotEmpty) return assignedWorkerIds;
     final id = assignedWorkerId;
@@ -268,6 +339,35 @@ class ReportIssue {
     return crewIds;
   }
 
+  // Worker finished photos, but official has not sent them to the public yet.
+  bool get awaitingOfficialCompletion {
+    if (completionSharedWithPublic) return false;
+    if (status == ReportStatus.completed ||
+        status == ReportStatus.publicFeed) {
+      return false;
+    }
+    if (status == ReportStatus.workCompleted ||
+        status == ReportStatus.officialFinalReview) {
+      return true;
+    }
+    if (workerCompletionSubmitted) return true;
+    if (hasCompletionPhotos) return true;
+    if (completionImages.isNotEmpty) return true;
+    final proof = proofImageUrl;
+    return proof != null && proof.isNotEmpty;
+  }
+
+  // Official already sent the funded budget to the worker and public.
+  bool get isFundedBudgetSent {
+    if (budgetSharedWithPublic) return true;
+    return status == ReportStatus.taskAssigned ||
+        status == ReportStatus.workInProgress ||
+        status == ReportStatus.workCompleted ||
+        status == ReportStatus.officialFinalReview ||
+        status == ReportStatus.completed ||
+        status == ReportStatus.publicFeed;
+  }
+
   bool get canPublicPostBudget =>
       budgetSharedWithPublic ||
       status == ReportStatus.taskAssigned ||
@@ -275,6 +375,21 @@ class ReportIssue {
       status == ReportStatus.workCompleted ||
       status == ReportStatus.completed ||
       status == ReportStatus.publicFeed;
+
+  bool get isPublicCompleted =>
+      status == ReportStatus.completed || status == ReportStatus.publicFeed;
+
+  bool get isPublicClosed =>
+      status == ReportStatus.officialDeclined ||
+      status == ReportStatus.verifiedFake ||
+      status == ReportStatus.duplicate ||
+      status == ReportStatus.budgetRejected;
+
+  String get publicWorkState {
+    if (isPublicCompleted) return 'Completed';
+    if (isPublicClosed) return 'Closed';
+    return 'In progress';
+  }
 
   bool get canPublicPostAfter =>
       completionSharedWithPublic ||
@@ -297,6 +412,24 @@ class ReportIssue {
     return 'Post to my feed';
   }
 
+  // Hide the reporter name from officials when the report is anonymous.
+  bool hidesReporterFrom(UserProfile viewer) {
+    if (!isAnonymous) return false;
+    if (viewer.hasRole(UserRole.admin)) return false;
+    if (viewer.uid == uid) return false;
+    return true;
+  }
+
+  // Named reports first, then anonymous, then newest.
+  static int compareOfficialPriority(ReportIssue a, ReportIssue b) {
+    final byAnonymous = (a.isAnonymous ? 1 : 0).compareTo(
+      b.isAnonymous ? 1 : 0,
+    );
+    if (byAnonymous != 0) return byAnonymous;
+    return (b.createdAt ?? DateTime(0)).compareTo(a.createdAt ?? DateTime(0));
+  }
+
+  // Tracking code shown to the public, e.g. HF-XXXXXX.
   String get publicId {
     if (trackingCode != null && trackingCode!.trim().isNotEmpty) {
       return trackingCode!;
@@ -308,6 +441,19 @@ class ReportIssue {
     return 'HF-$code';
   }
 
+  static String normalizeStatus(String raw) {
+    switch (raw.trim().toLowerCase()) {
+      case 'work_complete':
+      case 'worker_completed':
+      case 'task_completed':
+      case 'completion_submitted':
+        return ReportStatus.workCompleted;
+      default:
+        return raw;
+    }
+  }
+
+  // Map a Firestore report document into this class.
   factory ReportIssue.fromFirestore(
     DocumentSnapshot<Map<String, dynamic>> doc,
   ) {
@@ -319,7 +465,9 @@ class ReportIssue {
       title: (data['title'] as String?) ?? '',
       description: (data['description'] as String?) ?? '',
       category: (data['category'] as String?) ?? 'General',
-      status: (data['status'] as String?) ?? 'submitted',
+      status: ReportIssue.normalizeStatus(
+        (data['status'] as String?) ?? 'submitted',
+      ),
       assignedWorkerId: data['assignedWorkerId'] as String?,
       assignedWorkerName: data['assignedWorkerName'] as String?,
       assignedWorkerIds: ((data['assignedWorkerIds'] as List?) ?? const [])
@@ -350,12 +498,19 @@ class ReportIssue {
       budgetSharedWithPublic: data['budgetSharedWithPublic'] == true,
       publishedBudgetToFeed: data['publishedBudgetToFeed'] == true,
       completionSharedWithPublic: data['completionSharedWithPublic'] == true,
+      workerCompletionSubmitted: data['workerCompletionSubmitted'] == true,
+      hasCompletionPhotos: data['hasCompletionPhotos'] == true ||
+          ((data['completionImages'] as List?) ?? const []).isNotEmpty,
       publishedAfterToFeed: data['publishedAfterToFeed'] == true,
       feedPostId: data['feedPostId'] as String?,
       workerVerification: data['workerVerification'] as String?,
       workerVerificationReason: data['workerVerificationReason'] as String?,
       workerEvidenceImages:
           ((data['workerEvidenceImages'] as List?) ?? const [])
+              .map((e) => e.toString())
+              .toList(),
+      workerEvidenceVideos:
+          ((data['workerEvidenceVideos'] as List?) ?? const [])
               .map((e) => e.toString())
               .toList(),
       inspectionItems: ((data['inspectionItems'] as List?) ?? const [])
@@ -373,8 +528,10 @@ class ReportIssue {
       workerExpectedPayment:
           (data['workerExpectedPayment'] as num?)?.toDouble() ?? 0,
       expectedWorkDays: (data['expectedWorkDays'] as num?)?.toInt() ?? 0,
+      budgetStatus: data['budgetStatus'] as String?,
       approvedBudgetAmount: (data['approvedBudgetAmount'] as num?)?.toDouble(),
       trackingCode: data['trackingCode'] as String?,
+      citizenName: data['citizenName'] as String?,
       createdAt: createdAt is Timestamp ? createdAt.toDate() : null,
       locationTimestamp: data['locationTimestamp'] is Timestamp
           ? (data['locationTimestamp'] as Timestamp).toDate()
@@ -383,6 +540,34 @@ class ReportIssue {
   }
 }
 
+// Private identity for anonymous reports. Only admin should read this.
+class ReporterIdentity {
+  final String uid;
+  final String name;
+  final String email;
+  final String phone;
+  final String? citizenshipNumber;
+
+  const ReporterIdentity({
+    required this.uid,
+    required this.name,
+    required this.email,
+    required this.phone,
+    this.citizenshipNumber,
+  });
+
+  factory ReporterIdentity.fromMap(Map<String, dynamic> data) {
+    return ReporterIdentity(
+      uid: (data['uid'] as String?) ?? '',
+      name: (data['name'] as String?) ?? '',
+      email: (data['email'] as String?) ?? '',
+      phone: (data['phone'] as String?) ?? '',
+      citizenshipNumber: data['citizenshipNumber'] as String?,
+    );
+  }
+}
+
+// Official job application waiting for admin approval.
 class AccessRequest {
   final String id;
   final String uid;
@@ -434,6 +619,7 @@ class AccessRequest {
   }
 }
 
+// Worker job application waiting for official approval.
 class WorkerApplication {
   final String id;
   final String uid;
@@ -442,6 +628,7 @@ class WorkerApplication {
   final String phone;
   final String status;
   final String? specialization;
+  final List<String> specializations;
   final String? district;
   final String? municipality;
   final String? experienceYears;
@@ -462,6 +649,7 @@ class WorkerApplication {
     required this.phone,
     required this.status,
     this.specialization,
+    this.specializations = const [],
     this.district,
     this.municipality,
     this.experienceYears,
@@ -480,11 +668,20 @@ class WorkerApplication {
     return value.isEmpty ? 'Worker' : value;
   }
 
+  String get specialtyLabel {
+    if (specializations.isNotEmpty) return specializations.join(', ');
+    return (specialization ?? '').trim();
+  }
+
   factory WorkerApplication.fromFirestore(
     DocumentSnapshot<Map<String, dynamic>> doc,
   ) {
     final data = doc.data() ?? <String, dynamic>{};
     final createdAt = data['createdAt'];
+    final specs = WorkerSpecialties.fromFirestore(
+      data['specializations'],
+      data['specialization'] as String?,
+    );
     return WorkerApplication(
       id: doc.id,
       uid: (data['uid'] as String?) ?? '',
@@ -492,7 +689,10 @@ class WorkerApplication {
       email: (data['email'] as String?) ?? '',
       phone: (data['phone'] as String?) ?? '',
       status: (data['status'] as String?) ?? 'pending',
-      specialization: data['specialization'] as String?,
+      specialization: specs.isNotEmpty
+          ? specs.join(', ')
+          : data['specialization'] as String?,
+      specializations: specs,
       district: data['district'] as String?,
       municipality: data['municipality'] as String?,
       experienceYears: data['experienceYears']?.toString(),
@@ -508,6 +708,7 @@ class WorkerApplication {
   }
 }
 
+// One document in the "notifications" collection.
 class AppNotification {
   final String id;
   final String recipientUid;
@@ -515,6 +716,9 @@ class AppNotification {
   final String body;
   final String type;
   final String? relatedId;
+  final String? senderUid;
+  final String? senderName;
+  final String? senderRole;
   final bool read;
   final DateTime? createdAt;
 
@@ -525,9 +729,51 @@ class AppNotification {
     required this.body,
     required this.type,
     this.relatedId,
+    this.senderUid,
+    this.senderName,
+    this.senderRole,
     this.read = false,
     this.createdAt,
   });
+
+  // Public and worker inboxes only show certain alert types.
+  bool visibleFor(UserProfile? profile) {
+    if (profile == null) return true;
+    if (profile.hasRole(UserRole.public)) {
+      return AlertType.publicVisible.contains(type);
+    }
+    if (profile.hasRole(UserRole.worker) &&
+        !profile.hasRole(UserRole.official) &&
+        !profile.hasRole(UserRole.admin)) {
+      return AlertType.workerVisible.contains(type) ||
+          type == AlertType.message;
+    }
+    return true;
+  }
+
+  static int unreadCount(
+    Iterable<AppNotification> items, {
+    Set<String>? types,
+    Set<String>? excludeTypes,
+    UserProfile? profile,
+  }) {
+    final seenBudget = <String>{};
+    var count = 0;
+    for (final item in items) {
+      if (item.read) continue;
+      if (profile != null && !item.visibleFor(profile)) continue;
+      if (types != null && !types.contains(item.type)) continue;
+      if (excludeTypes != null && excludeTypes.contains(item.type)) continue;
+      if (item.type == AlertType.budget &&
+          item.relatedId != null &&
+          item.relatedId!.isNotEmpty) {
+        if (seenBudget.contains(item.relatedId)) continue;
+        seenBudget.add(item.relatedId!);
+      }
+      count++;
+    }
+    return count;
+  }
 
   factory AppNotification.fromFirestore(
     DocumentSnapshot<Map<String, dynamic>> doc,
@@ -541,12 +787,16 @@ class AppNotification {
       body: (data['body'] as String?) ?? '',
       type: (data['type'] as String?) ?? 'general',
       relatedId: data['relatedId'] as String?,
+      senderUid: data['senderUid'] as String?,
+      senderName: data['senderName'] as String?,
+      senderRole: data['senderRole'] as String?,
       read: data['read'] == true,
       createdAt: createdAt is Timestamp ? createdAt.toDate() : null,
     );
   }
 }
 
+// One post on the public community feed.
 class FeedPost {
   final String id;
   final String uid;
@@ -554,10 +804,12 @@ class FeedPost {
   final String text;
   final String? imageUrl;
   final String? afterImageUrl;
+  final String? videoUrl;
   final String? reportId;
   final String? trackingCode;
   final double? approvedBudgetAmount;
   final List<String> likedBy;
+  final int commentCount;
   final DateTime? createdAt;
 
   const FeedPost({
@@ -567,10 +819,12 @@ class FeedPost {
     required this.text,
     this.imageUrl,
     this.afterImageUrl,
+    this.videoUrl,
     this.reportId,
     this.trackingCode,
     this.approvedBudgetAmount,
     this.likedBy = const [],
+    this.commentCount = 0,
     this.createdAt,
   });
 
@@ -581,25 +835,34 @@ class FeedPost {
   factory FeedPost.fromFirestore(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? <String, dynamic>{};
     final createdAt = data['createdAt'];
+    final storedText = (data['text'] as String?)?.trim() ?? '';
+    final caption = (data['caption'] as String?) ?? '';
+    var postText = storedText;
+    if (postText.isEmpty) {
+      postText = caption;
+    }
     return FeedPost(
       id: doc.id,
       uid: (data['uid'] as String?) ?? '',
       authorName: (data['authorName'] as String?) ?? '',
-      text: (data['text'] as String?) ?? '',
+      text: postText,
       imageUrl:
           data['imageUrl'] as String? ?? data['beforeImageUrl'] as String?,
       afterImageUrl: data['afterImageUrl'] as String?,
+      videoUrl: data['videoUrl'] as String?,
       reportId: data['reportId'] as String?,
       trackingCode: data['trackingCode'] as String?,
       approvedBudgetAmount: (data['approvedBudgetAmount'] as num?)?.toDouble(),
       likedBy: ((data['likedBy'] as List?) ?? const [])
           .map((item) => item.toString())
           .toList(),
+      commentCount: (data['commentCount'] as num?)?.toInt() ?? 0,
       createdAt: createdAt is Timestamp ? createdAt.toDate() : null,
     );
   }
 }
 
+// A comment on a feed post.
 class FeedComment {
   final String id;
   final String uid;
@@ -630,6 +893,7 @@ class FeedComment {
   }
 }
 
+// Budget request for a report (materials + worker pay).
 class BudgetRequest {
   final String id;
   final String reportId;
@@ -685,6 +949,7 @@ class BudgetRequest {
   }
 }
 
+// One material line on a budget (legacy helper).
 class BudgetItem {
   final String id;
   final String title;

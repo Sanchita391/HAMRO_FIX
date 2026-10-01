@@ -81,9 +81,16 @@ service cloud.firestore {
     }
 
     function assignedToMe() {
-      return resource.data.assignedWorkerId == request.auth.uid
-        || resource.data.workerId == request.auth.uid
-        || request.auth.uid in resource.data.assignedWorkerIds;
+      return (resource.data.keys().hasAny(['assignedWorkerId'])
+            && resource.data.assignedWorkerId == request.auth.uid)
+        || (resource.data.keys().hasAny(['workerId'])
+            && resource.data.workerId == request.auth.uid)
+        || (resource.data.keys().hasAny(['assignedWorkerIds'])
+            && resource.data.assignedWorkerIds is list
+            && request.auth.uid in resource.data.assignedWorkerIds)
+        || (resource.data.keys().hasAny(['inspectedByIds'])
+            && resource.data.inspectedByIds is list
+            && request.auth.uid in resource.data.inspectedByIds);
     }
 
     function isAssignedWorker() {
@@ -161,8 +168,8 @@ service cloud.firestore {
                   'accountStatus', 'approvalStatus', 'status',
                   'reviewedBy', 'reviewedAt', 'mustChangePassword',
                   'blacklistReason', 'blacklistStatus', 'removedReason',
-                  'removedAt', 'roles', 'specialization', 'district',
-                  'municipality'
+                  'removedAt', 'roles', 'specialization', 'specializations',
+                  'district', 'municipality'
                 ]));
 
       allow delete: if isAdmin();
@@ -266,6 +273,23 @@ service cloud.firestore {
 
       allow delete: if isAdmin();
 
+      match /private/{docId} {
+        allow read: if isAdmin()
+          || (isAuthenticated()
+              && get(/databases/$(database)/documents/reports/$(reportId)).data.uid
+                == request.auth.uid);
+        allow create: if isAuthenticated()
+          && request.resource.data.uid == request.auth.uid;
+        allow update, delete: if isAdmin();
+      }
+
+      match /completionPhotos/{photoId} {
+        allow get, list: if isAuthenticated();
+        allow create: if isAuthenticated()
+          && (isOfficial() || isAdmin() || isWorker());
+        allow update, delete: if isOfficial() || isAdmin();
+      }
+
       match /comments/{commentId} {
         allow read: if isAuthenticated();
         allow create: if isAuthenticated()
@@ -304,11 +328,26 @@ service cloud.firestore {
         && request.resource.data.uid == request.auth.uid;
       allow update: if (isOwner(resource.data.uid)
             && request.resource.data.diff(resource.data).affectedKeys()
-                .hasOnly(['text', 'caption', 'imageUrl', 'beforeImageUrl', 'afterImageUrl', 'updatedAt', 'isAnonymous', 'likedBy']))
+                .hasOnly([
+                  'text',
+                  'caption',
+                  'imageUrl',
+                  'beforeImageUrl',
+                  'afterImageUrl',
+                  'updatedAt',
+                  'isAnonymous',
+                  'likedBy',
+                  'commentCount'
+                ]))
         || isAdmin()
         || (isAuthenticated()
             && request.resource.data.diff(resource.data).affectedKeys()
-                .hasOnly(['likedBy']));
+                .hasOnly(['likedBy']))
+        || (isAuthenticated()
+            && request.resource.data.diff(resource.data).affectedKeys()
+                .hasOnly(['commentCount'])
+            && request.resource.data.commentCount is number
+            && request.resource.data.commentCount >= 0);
       allow delete: if isOwner(resource.data.uid) || isAdmin();
 
       match /comments/{commentId} {
@@ -376,6 +415,28 @@ service cloud.firestore {
         && bootstrapOpen()
         && request.resource.data.adminUid == request.auth.uid;
       allow update, delete: if isAdmin();
+    }
+
+    match /video_assets/{assetId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.chunkCount is int
+        && request.resource.data.chunkCount > 0
+        && request.resource.data.chunkCount <= 40;
+      allow update, delete: if isAdmin() || isOwner(resource.data.uid);
+
+      match /chunks/{chunkId} {
+        allow read: if isAuthenticated();
+        allow create: if isAuthenticated()
+          && exists(/databases/$(database)/documents/video_assets/$(assetId))
+          && get(/databases/$(database)/documents/video_assets/$(assetId)).data.uid
+            == request.auth.uid
+          && request.resource.data.d is string
+          && request.resource.data.d.size() > 0
+          && request.resource.data.d.size() < 900000;
+        allow update, delete: if isAdmin();
+      }
     }
   }
 }

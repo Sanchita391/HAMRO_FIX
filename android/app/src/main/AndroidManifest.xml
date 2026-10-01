@@ -12,7 +12,7 @@
 
     <application
         android:label="HamroFix"
-        android:name="${applicationName}"
+        android:name=".HamroFixApplication"
         android:icon="@mipmap/ic_launcher">
         <activity
             android:name="app.hamro_fix.MainActivity"

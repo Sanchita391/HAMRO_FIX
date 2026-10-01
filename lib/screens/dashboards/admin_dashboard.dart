@@ -5,7 +5,7 @@ import 'package:hamro_fix/core/l10n/app_locale.dart';
 import 'package:hamro_fix/core/theme/app_theme.dart';
 import 'package:hamro_fix/models/public_model.dart';
 import 'package:hamro_fix/screens/dashboards/dashboard_widgets.dart';
-import 'package:hamro_fix/screens/dashboards/shared_tabs.dart';
+import 'package:hamro_fix/screens/dashboards/staff_message_pages.dart';
 import 'package:hamro_fix/screens/reports/budget_details_page.dart';
 import 'package:hamro_fix/screens/reports/report_details_page.dart';
 import 'package:hamro_fix/services/auth_messages.dart';
@@ -15,16 +15,19 @@ import 'package:hamro_fix/services/notification_service.dart';
 import 'package:hamro_fix/services/report_service.dart';
 import 'package:hamro_fix/widgets/application_review.dart';
 import 'package:hamro_fix/widgets/login_invite_sheet.dart';
+import 'package:hamro_fix/widgets/report_video_player.dart';
+import 'package:hamro_fix/widgets/staff_dashboard_frame.dart';
 import 'package:hamro_fix/widgets/stored_image.dart';
+import 'package:hamro_fix/widgets/web_narrow_body.dart';
 import 'package:hamro_fix/widgets/worker_payment.dart';
 
 void openAdminBudgets(BuildContext context) {
   Navigator.of(context).push(
     MaterialPageRoute<void>(
-      builder: (_) => Scaffold(
-        backgroundColor: HamroFixTheme.canvas,
-        appBar: AppBar(title: const Text('Budgets')),
-        body: const _AdminBudgets(),
+      builder: (_) => WebPageScaffold(
+        title: 'Budgets',
+        maxWidth: 720,
+        body: _AdminBudgets(),
       ),
     ),
   );
@@ -49,30 +52,66 @@ class _AdminDashboardState extends State<AdminDashboard> {
     return StreamBuilder<List<AppNotification>>(
       stream: unread,
       builder: (context, alertSnap) {
-        final unreadCount = (alertSnap.data ?? [])
-            .where((item) => !item.read)
-            .length;
-        return Scaffold(
-          backgroundColor: HamroFixTheme.canvas,
-          appBar: AppBar(
-            backgroundColor: HamroFixTheme.canvas,
-            surfaceTintColor: Colors.transparent,
-            automaticallyImplyLeading: false,
-            titleSpacing: 16,
-            title: HamroFixBarTitle(
-                  subtitle: widget.profile.displayName,
+        final alerts = alertSnap.data ?? [];
+        final unreadCount = AppNotification.unreadCount(alerts);
+        final unreadNotifications = AppNotification.unreadCount(
+          alerts,
+          excludeTypes: AlertType.messageBadge,
+        );
+        final unreadMessages = AppNotification.unreadCount(
+          alerts,
+          types: AlertType.messageBadge,
+        );
+        final unreadReports = AppNotification.unreadCount(
+          alerts,
+          types: AlertType.reportBadge,
+        );
+        final unreadBudgets = AppNotification.unreadCount(
+          alerts,
+          types: AlertType.budgetBadge,
+        );
+        return StaffDashboardFrame(
+          title: loc.t('Admin Dashboard', 'एडमिन ड्यासबोर्ड'),
+          subtitle: widget.profile.displayName,
+          photoUrl: widget.profile.profileImageUrl,
+          selectedIndex: _index,
+          onSelect: (value) => setState(() => _index = value),
+          onLogout: () => confirmAndLogout(context),
+          items: [
+            StaffNavItem(
+              icon: const Icon(Icons.dashboard_outlined),
+              selectedIcon: const Icon(Icons.dashboard_rounded),
+              label: loc.t('Home', 'गृह'),
             ),
-            actions: [
-              IconButton(
-                tooltip: loc.t('Log out', 'लग आउट'),
-                onPressed: () => confirmAndLogout(context),
-                icon: const Icon(
-                  Icons.logout_rounded,
-                  color: HamroFixTheme.mediumGreen,
-                ),
+            StaffNavItem(
+              icon: const Icon(Icons.groups_outlined),
+              selectedIcon: const Icon(Icons.groups_rounded),
+              label: loc.t('People', 'प्रयोगकर्ता'),
+            ),
+            StaffNavItem(
+              icon: const Icon(Icons.verified_user_outlined),
+              selectedIcon: const Icon(Icons.verified_user_rounded),
+              label: loc.t('Approvals', 'स्वीकृति'),
+            ),
+            StaffNavItem(
+              icon: badgedIcon(Icons.report_outlined, unreadReports),
+              selectedIcon: badgedIcon(Icons.report_rounded, unreadReports),
+              label: loc.t('Reports', 'रिपोर्ट'),
+            ),
+            StaffNavItem(
+              icon: Badge(
+                isLabelVisible: unreadCount > 0,
+                label: Text('$unreadCount'),
+                child: const Icon(Icons.apps_outlined),
               ),
-            ],
-          ),
+              selectedIcon: Badge(
+                isLabelVisible: unreadCount > 0,
+                label: Text('$unreadCount'),
+                child: const Icon(Icons.apps_rounded),
+              ),
+              label: loc.t('More', 'थप'),
+            ),
+          ],
           body: IndexedStack(
             index: _index,
             children: [
@@ -83,46 +122,12 @@ class _AdminDashboardState extends State<AdminDashboard> {
               _UsersManager(admin: widget.profile),
               _AccessRequestsTab(admin: widget.profile),
               _AdminReports(profile: widget.profile),
-              _MoreTab(profile: widget.profile, unreadCount: unreadCount),
-            ],
-          ),
-          bottomNavigationBar: NavigationBar(
-            selectedIndex: _index,
-            onDestinationSelected: (value) => setState(() => _index = value),
-            indicatorColor: const Color(0xFFC8E6C9),
-            destinations: [
-              NavigationDestination(
-                icon: const Icon(Icons.dashboard_outlined),
-                selectedIcon: const Icon(Icons.dashboard_rounded),
-                label: loc.t('Home', 'गृह'),
-              ),
-              NavigationDestination(
-                icon: const Icon(Icons.groups_outlined),
-                selectedIcon: const Icon(Icons.groups_rounded),
-                label: loc.t('People', 'प्रयोगकर्ता'),
-              ),
-              NavigationDestination(
-                icon: const Icon(Icons.verified_user_outlined),
-                selectedIcon: const Icon(Icons.verified_user_rounded),
-                label: loc.t('Approvals', 'स्वीकृति'),
-              ),
-              NavigationDestination(
-                icon: const Icon(Icons.report_outlined),
-                selectedIcon: const Icon(Icons.report_rounded),
-                label: loc.t('Reports', 'रिपोर्ट'),
-              ),
-              NavigationDestination(
-                icon: Badge(
-                  isLabelVisible: unreadCount > 0,
-                  label: Text('$unreadCount'),
-                  child: const Icon(Icons.apps_outlined),
-                ),
-                selectedIcon: Badge(
-                  isLabelVisible: unreadCount > 0,
-                  label: Text('$unreadCount'),
-                  child: const Icon(Icons.apps_rounded),
-                ),
-                label: loc.t('More', 'थप'),
+              _MoreTab(
+                profile: widget.profile,
+                unreadCount: unreadCount,
+                unreadBudgets: unreadBudgets,
+                unreadNotifications: unreadNotifications,
+                unreadMessages: unreadMessages,
               ),
             ],
           ),
@@ -171,7 +176,7 @@ class _OverviewTab extends StatelessWidget {
                         .toList();
 
                     return ListView(
-                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                      padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
                       children: [
                         _HeroBanner(name: profile.name),
                         const SizedBox(height: 16),
@@ -894,13 +899,12 @@ class _OfficialCardState extends State<_OfficialCard> {
             const SizedBox(height: 12),
             SizedBox(
               width: double.infinity,
-              child: OutlinedButton.icon(
+              child: OutlinedButton(
                 onPressed: () => showOfficialApplicationReview(
                   context: context,
                   request: request,
                 ),
-                icon: const Icon(Icons.badge_outlined),
-                label: const Text('View all details & photo'),
+                child: const Text('View all details & photo'),
               ),
             ),
             if (pending) ...[
@@ -966,12 +970,11 @@ class _OfficialCardState extends State<_OfficialCard> {
             const SizedBox(height: 8),
             SizedBox(
               width: double.infinity,
-              child: OutlinedButton.icon(
+              child: OutlinedButton(
                 onPressed: _busy
                     ? null
                     : () => _showOfficialCredentials(context, request),
-                icon: const Icon(Icons.mark_email_read_outlined),
-                label: const Text('Send email & password'),
+                child: const Text('Send email & password'),
               ),
             ),
           ],
@@ -1099,70 +1102,82 @@ class _ReportTile extends StatelessWidget {
       elevation: 0,
       color: Colors.white,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(16),
-        onTap: () {
-          Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) =>
-                  ReportDetailsPage(report: report, profile: profile),
-            ),
-          );
-        },
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Row(
-            children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: SizedBox(
-                  width: 64,
-                  height: 64,
-                  child: report.imageUrl == null
-                      ? Container(
-                          color: const Color(0xFFE8F5E9),
-                          child: const Icon(
-                            Icons.photo_outlined,
-                            color: HamroFixTheme.mediumGreen,
-                          ),
-                        )
-                      : Image(
-                          image: StoredImage.provider(report.imageUrl)!,
-                          fit: BoxFit.cover,
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            InkWell(
+              borderRadius: BorderRadius.circular(12),
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) =>
+                        ReportDetailsPage(report: report, profile: profile),
+                  ),
+                );
+              },
+              child: Row(
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: SizedBox(
+                      width: 64,
+                      height: 64,
+                      child: report.imageUrl == null
+                          ? Container(
+                              color: const Color(0xFFE8F5E9),
+                              child: Icon(
+                                report.hasPlayableVideo
+                                    ? Icons.videocam_rounded
+                                    : Icons.photo_outlined,
+                                color: HamroFixTheme.mediumGreen,
+                              ),
+                            )
+                          : Image(
+                              image: StoredImage.provider(report.imageUrl)!,
+                              fit: BoxFit.cover,
+                            ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          report.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontWeight: FontWeight.w800),
                         ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      report.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontWeight: FontWeight.w800),
+                        const SizedBox(height: 4),
+                        Text(
+                          [
+                            report.category,
+                            if (report.isAnonymous) 'Anonymous',
+                            if ((report.municipality ?? '').isNotEmpty)
+                              report.municipality!,
+                            if (!report.isAnonymous &&
+                                (report.citizenName ?? '').trim().isNotEmpty)
+                              report.citizenName!.trim(),
+                          ].join(' · '),
+                          style: const TextStyle(
+                            color: Colors.black54,
+                            fontSize: 12,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        _StatusChip(status: report.status),
+                      ],
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      [
-                        report.category,
-                        if ((report.municipality ?? '').isNotEmpty)
-                          report.municipality!,
-                      ].join(' · '),
-                      style: const TextStyle(
-                        color: Colors.black54,
-                        fontSize: 12,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    _StatusChip(status: report.status),
-                  ],
-                ),
+                  ),
+                  const Icon(Icons.chevron_right_rounded, color: Colors.black38),
+                ],
               ),
-              const Icon(Icons.chevron_right_rounded, color: Colors.black38),
-            ],
-          ),
+            ),
+            if (report.hasPlayableVideo) ReportVideoPlayer(report, height: 200),
+          ],
         ),
       ),
     );
@@ -1376,10 +1391,19 @@ class _BudgetCardState extends State<_BudgetCard> {
 }
 
 class _MoreTab extends StatelessWidget {
-  const _MoreTab({required this.profile, required this.unreadCount});
+  const _MoreTab({
+    required this.profile,
+    required this.unreadCount,
+    required this.unreadBudgets,
+    required this.unreadNotifications,
+    required this.unreadMessages,
+  });
 
   final UserProfile profile;
   final int unreadCount;
+  final int unreadBudgets;
+  final int unreadNotifications;
+  final int unreadMessages;
 
   @override
   Widget build(BuildContext context) {
@@ -1391,28 +1415,36 @@ class _MoreTab extends StatelessWidget {
           color: const Color(0xFF6A1B9A),
           title: 'Budgets',
           subtitle: 'Approve or reject civic budget requests',
+          badge: unreadBudgets,
           onTap: () => openAdminBudgets(context),
         ),
         const SizedBox(height: 10),
         _MoreTile(
           icon: Icons.notifications_rounded,
           color: const Color(0xFFE65100),
-          title: 'Alerts',
-          subtitle: unreadCount == 0
-              ? 'No unread alerts'
-              : '$unreadCount unread alert${unreadCount == 1 ? '' : 's'}',
-          badge: unreadCount,
-          onTap: () {
-            Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => Scaffold(
-                  backgroundColor: HamroFixTheme.canvas,
-                  appBar: AppBar(title: const Text('Alerts')),
-                  body: NotificationsTab(uid: profile.uid),
-                ),
-              ),
-            );
-          },
+          title: 'Notifications',
+          subtitle: unreadNotifications == 0
+              ? 'Budget and report updates'
+              : '$unreadNotifications unread notification${unreadNotifications == 1 ? '' : 's'}',
+          badge: unreadNotifications,
+          onTap: () => openNotificationsPage(context, profile),
+        ),
+        const SizedBox(height: 10),
+        _MoreTile(
+          icon: Icons.mail_rounded,
+          color: const Color(0xFF1565C0),
+          title: 'Messages',
+          subtitle: 'From officials',
+          badge: unreadMessages,
+          onTap: () => openStaffMessagesPage(context, profile),
+        ),
+        const SizedBox(height: 10),
+        _MoreTile(
+          icon: Icons.send_rounded,
+          color: HamroFixTheme.mediumGreen,
+          title: 'Send alert',
+          subtitle: 'Write an extra note to an official or worker',
+          onTap: () => openSendAlertPage(context, profile),
         ),
         const SizedBox(height: 10),
         _MoreTile(
@@ -1423,9 +1455,9 @@ class _MoreTab extends StatelessWidget {
           onTap: () {
             Navigator.of(context).push(
               MaterialPageRoute<void>(
-                builder: (_) => Scaffold(
-                  backgroundColor: HamroFixTheme.canvas,
-                  appBar: AppBar(title: const Text('Profile')),
+                builder: (_) => WebPageScaffold(
+                  title: 'Profile',
+                  maxWidth: 640,
                   body: ProfileTab(profile: profile),
                 ),
               ),

@@ -4,7 +4,12 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 
+import 'package:hamro_fix/core/l10n/app_locale.dart';
+import 'package:hamro_fix/core/platform/app_target.dart';
+import 'package:hamro_fix/screens/auth/use_correct_app_page.dart';
+import 'package:hamro_fix/widgets/xfile_preview.dart';
 import 'package:hamro_fix/screens/auth/landing_page.dart';
 import 'package:hamro_fix/screens/auth/public/public_login.dart';
 import 'package:hamro_fix/services/auth_messages.dart';
@@ -31,6 +36,13 @@ class _PublicSignupPageState extends State<PublicSignupPage> {
   bool _obscurePassword = true;
   bool _obscureConfirm = true;
   bool _isLoading = false;
+  XFile? _profileImage;
+
+  @override
+  void initState() {
+    super.initState();
+    _isEnglish = AppLocale.instance.isEnglish;
+  }
 
   @override
   void dispose() {
@@ -131,6 +143,15 @@ class _PublicSignupPageState extends State<PublicSignupPage> {
       );
       return;
     }
+    if (_profileImage == null) {
+      _showSnack(
+        _isEnglish
+            ? 'Please upload your profile photo'
+            : 'कृपया प्रोफाइल तस्बिर हाल्नुहोस्',
+        isError: true,
+      );
+      return;
+    }
 
     setState(() => _isLoading = true);
 
@@ -140,16 +161,12 @@ class _PublicSignupPageState extends State<PublicSignupPage> {
         email: _emailController.text,
         phone: _phoneController.text,
         password: _passwordController.text,
+        profileImage: _profileImage,
       );
 
       if (!mounted) return;
       setState(() => _isLoading = false);
-
-      _showSnack(
-        _isEnglish
-            ? 'Registration successful!'
-            : 'दर्ता सफल भयो!',
-      );
+      Navigator.of(context).popUntil((route) => route.isFirst);
     } catch (e) {
       if (!mounted) return;
       setState(() => _isLoading = false);
@@ -338,6 +355,12 @@ class _PublicSignupPageState extends State<PublicSignupPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (AppTarget.isWeb) {
+      return const LoginPlatformGuard(
+        staffWebPage: false,
+        child: SizedBox.shrink(),
+      );
+    }
     return Scaffold(
       backgroundColor: const Color(0xFFF6FBF6),
       appBar: AppBar(
@@ -352,7 +375,7 @@ class _PublicSignupPageState extends State<PublicSignupPage> {
           onPressed: _navigateBackToLanding,
         ),
         title: Text(
-          _isEnglish ? 'Citizen Registration' : 'नागरिक दर्ता',
+          _isEnglish ? 'Public Registration' : 'सार्वजनिक दर्ता',
           style: const TextStyle(
             fontWeight: FontWeight.w700,
             fontSize: 18,
@@ -362,22 +385,24 @@ class _PublicSignupPageState extends State<PublicSignupPage> {
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 12),
-            child: TextButton.icon(
+            child: TextButton(
               onPressed: () {
                 HapticFeedback.selectionClick();
-                setState(() => _isEnglish = !_isEnglish);
+                setState(() {
+                  _isEnglish = !_isEnglish;
+                  AppLocale.instance.setEnglish(_isEnglish);
+                });
               },
-              icon: const Icon(Icons.language_rounded, size: 18),
-              label: Text(
+              style: TextButton.styleFrom(
+                foregroundColor: const Color(0xFF2E7D32),
+                visualDensity: VisualDensity.compact,
+              ),
+              child: Text(
                 _isEnglish ? 'नेपाली' : 'English',
                 style: const TextStyle(
                   fontWeight: FontWeight.bold,
                   fontSize: 13,
                 ),
-              ),
-              style: TextButton.styleFrom(
-                foregroundColor: const Color(0xFF2E7D32),
-                visualDensity: VisualDensity.compact,
               ),
             ),
           ),
@@ -417,7 +442,7 @@ class _PublicSignupPageState extends State<PublicSignupPage> {
                       ),
                       const SizedBox(height: 10),
                       Text(
-                        _isEnglish ? 'Public Citizen Account' : 'नागरिक खाता',
+                        _isEnglish ? 'Public Account' : 'सार्वजनिक खाता',
                         style: const TextStyle(
                           fontSize: 22,
                           fontWeight: FontWeight.w800,
@@ -441,6 +466,43 @@ class _PublicSignupPageState extends State<PublicSignupPage> {
                 ),
                 const SizedBox(height: 20),
                 _authTabs(registerSelected: true),
+                const SizedBox(height: 16),
+                Center(
+                  child: GestureDetector(
+                    onTap: () async {
+                      final file = await ImagePicker().pickImage(
+                        source: ImageSource.gallery,
+                        imageQuality: 80,
+                      );
+                      if (file != null) setState(() => _profileImage = file);
+                    },
+                    child: _profileImage == null
+                        ? const CircleAvatar(
+                            radius: 42,
+                            backgroundColor: Color(0xFFE8F5E9),
+                            child: Icon(
+                              Icons.camera_alt_outlined,
+                              color: Color(0xFF2E7D32),
+                            ),
+                          )
+                        : XFileCircleImage(
+                            file: _profileImage!,
+                            radius: 42,
+                          ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Center(
+                  child: Text(
+                    _isEnglish
+                        ? 'Profile photo (required)'
+                        : 'प्रोफाइल तस्बिर (आवश्यक)',
+                    style: const TextStyle(
+                      color: Color(0xFF2E7D32),
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
                 _sectionHeader('Personal Details', 'व्यक्तिगत विवरणहरू'),
                 TextFormField(
                   controller: _fullNameController,
@@ -461,7 +523,7 @@ class _PublicSignupPageState extends State<PublicSignupPage> {
                   validator: _validateEmail,
                   decoration: _inputDecoration(
                     label: _isEnglish ? 'Email Address' : 'इमेल ठेगाना',
-                    hint: 'citizen@example.com',
+                    hint: 'public@example.com',
                     icon: Icons.email_outlined,
                   ),
                 ),
@@ -483,48 +545,49 @@ class _PublicSignupPageState extends State<PublicSignupPage> {
                 ),
                 const SizedBox(height: 12),
                 TextFormField(
-                  controller: _passwordController,
-                  obscureText: _obscurePassword,
-                  validator: _validatePassword,
-                  decoration: _inputDecoration(
-                    label: _isEnglish ? 'Password' : 'पासवर्ड',
-                    hint: '••••••••',
-                    icon: Icons.lock_outline_rounded,
-                    suffixIcon: IconButton(
-                      icon: Icon(
-                        _obscurePassword
-                            ? Icons.visibility_off_outlined
-                            : Icons.visibility_outlined,
-                        color: Colors.grey.shade600,
+                    controller: _passwordController,
+                    obscureText: _obscurePassword,
+                    validator: _validatePassword,
+                    decoration: _inputDecoration(
+                      label: _isEnglish ? 'Password' : 'पासवर्ड',
+                      hint: '••••••••',
+                      icon: Icons.lock_outline_rounded,
+                      suffixIcon: IconButton(
+                        icon: Icon(
+                          _obscurePassword
+                              ? Icons.visibility_off_outlined
+                              : Icons.visibility_outlined,
+                          color: Colors.grey.shade600,
+                        ),
+                        onPressed: () => setState(
+                          () => _obscurePassword = !_obscurePassword,
+                        ),
                       ),
-                      onPressed: () =>
-                          setState(() => _obscurePassword = !_obscurePassword),
                     ),
                   ),
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: _confirmPasswordController,
-                  obscureText: _obscureConfirm,
-                  validator: _validateConfirmPassword,
-                  decoration: _inputDecoration(
-                    label: _isEnglish
-                        ? 'Confirm Password'
-                        : 'पासवर्ड पुष्टि गर्नुहोस्',
-                    hint: '••••••••',
-                    icon: Icons.lock_outline_rounded,
-                    suffixIcon: IconButton(
-                      icon: Icon(
-                        _obscureConfirm
-                            ? Icons.visibility_off_outlined
-                            : Icons.visibility_outlined,
-                        color: Colors.grey.shade600,
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: _confirmPasswordController,
+                    obscureText: _obscureConfirm,
+                    validator: _validateConfirmPassword,
+                    decoration: _inputDecoration(
+                      label: _isEnglish
+                          ? 'Confirm Password'
+                          : 'पासवर्ड पुष्टि गर्नुहोस्',
+                      hint: '••••••••',
+                      icon: Icons.lock_outline_rounded,
+                      suffixIcon: IconButton(
+                        icon: Icon(
+                          _obscureConfirm
+                              ? Icons.visibility_off_outlined
+                              : Icons.visibility_outlined,
+                          color: Colors.grey.shade600,
+                        ),
+                        onPressed: () =>
+                            setState(() => _obscureConfirm = !_obscureConfirm),
                       ),
-                      onPressed: () =>
-                          setState(() => _obscureConfirm = !_obscureConfirm),
                     ),
                   ),
-                ),
                 const SizedBox(height: 24),
                 SizedBox(
                   height: 52,
@@ -548,7 +611,9 @@ class _PublicSignupPageState extends State<PublicSignupPage> {
                             ),
                           )
                         : Text(
-                            _isEnglish ? 'Create Account' : 'खाता बनाउनुहोस्',
+                            _isEnglish
+                                ? 'Create Account'
+                                : 'खाता बनाउनुहोस्',
                             style: const TextStyle(
                               fontSize: 16,
                               fontWeight: FontWeight.bold,

@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
@@ -13,8 +12,12 @@ import 'package:hamro_fix/screens/dashboards/shared_tabs.dart';
 import 'package:hamro_fix/screens/reports/report_details_page.dart';
 import 'package:hamro_fix/services/auth_messages.dart';
 import 'package:hamro_fix/services/location_service.dart';
+import 'package:hamro_fix/services/notification_service.dart';
 import 'package:hamro_fix/services/report_service.dart';
+import 'package:hamro_fix/widgets/report_video_player.dart';
 import 'package:hamro_fix/widgets/stored_image.dart';
+import 'package:hamro_fix/widgets/xfile_preview.dart';
+import 'package:hamro_fix/widgets/xfile_video_preview.dart';
 
 // Brand Light Green Theme Colors
 const Color kPrimaryGreen = Color(0xFF1B5E20);
@@ -42,7 +45,27 @@ class _PublicDashboardState extends State<PublicDashboard> {
   Widget build(BuildContext context) {
     final loc = LocaleScope.of(context);
 
-    return Scaffold(
+    return StreamBuilder<List<AppNotification>>(
+      stream: NotificationService().watchMine(widget.profile.uid),
+      builder: (context, alertSnap) {
+        final alerts = alertSnap.data ?? [];
+        final unreadAlerts = AppNotification.unreadCount(
+          alerts,
+          profile: widget.profile,
+        );
+        final unreadReports = AppNotification.unreadCount(
+          alerts,
+          types: AlertType.reportBadge,
+          profile: widget.profile,
+        );
+        final unreadBudgets = AppNotification.unreadCount(
+          alerts,
+          types: AlertType.budgetBadge,
+          profile: widget.profile,
+        );
+        final reportBadge = unreadReports + unreadBudgets;
+
+        return Scaffold(
       backgroundColor: kLightGreenBg,
       appBar: AppBar(
         elevation: 0,
@@ -50,6 +73,7 @@ class _PublicDashboardState extends State<PublicDashboard> {
         surfaceTintColor: Colors.transparent,
         title: HamroFixBarTitle(
           subtitle: widget.profile.displayName,
+          photoUrl: widget.profile.profileImageUrl,
         ),
         actions: [
           IconButton(
@@ -101,9 +125,9 @@ class _PublicDashboardState extends State<PublicDashboard> {
               label: AppLocale.instance.t('Report', 'रिपोर्ट'),
             ),
             BottomNavigationBarItem(
-              icon: const Icon(Icons.receipt_long_outlined),
-              activeIcon: const Icon(Icons.receipt_long_rounded),
-              label: AppLocale.instance.t('My IDs', 'मेरा आईडी'),
+              icon: badgedIcon(Icons.receipt_long_outlined, reportBadge),
+              activeIcon: badgedIcon(Icons.receipt_long_rounded, reportBadge),
+              label: AppLocale.instance.t('My Reports', 'मेरा रिपोर्ट'),
             ),
             BottomNavigationBarItem(
               icon: const Icon(Icons.public_outlined),
@@ -116,8 +140,8 @@ class _PublicDashboardState extends State<PublicDashboard> {
               label: AppLocale.instance.t('My Feed', 'मेरो फिड'),
             ),
             BottomNavigationBarItem(
-              icon: const Icon(Icons.notifications_none_rounded),
-              activeIcon: const Icon(Icons.notifications_rounded),
+              icon: badgedIcon(Icons.notifications_none_rounded, unreadAlerts),
+              activeIcon: badgedIcon(Icons.notifications_rounded, unreadAlerts),
               label: AppLocale.instance.t('Alerts', 'सूचना'),
             ),
             BottomNavigationBarItem(
@@ -128,6 +152,8 @@ class _PublicDashboardState extends State<PublicDashboard> {
           ],
         ),
       ),
+    );
+      },
     );
   }
 }
@@ -160,6 +186,8 @@ class _InteractiveCreateReportTabState
   String _selectedMunicipality = 'Kathmandu Metropolitan';
   bool _isSubmitting = false;
   bool _locating = false;
+  bool _locationPinned = false;
+  bool _submitAnonymously = false;
 
   final List<String> _categories = ReportCategories.all;
 
@@ -179,12 +207,24 @@ class _InteractiveCreateReportTabState
     super.dispose();
   }
 
+  void _pinLocation(LatLng point) {
+    setState(() {
+      _selectedLocation = point;
+      _locationPinned = true;
+    });
+  }
+
+  String _coordLabel() {
+    return '${_selectedLocation.latitude.toStringAsFixed(5)}, ${_selectedLocation.longitude.toStringAsFixed(5)}';
+  }
+
   Future<void> _useCurrentLocation() async {
     setState(() => _locating = true);
     try {
       final location = await LocationService().captureCurrent();
       final point = LatLng(location.latitude, location.longitude);
-      setState(() => _selectedLocation = point);
+      if (!mounted) return;
+      _pinLocation(point);
       _mapController.move(point, 16);
     } catch (e) {
       if (!mounted) return;
@@ -198,7 +238,10 @@ class _InteractiveCreateReportTabState
 
   Future<void> _pickMedia(ImageSource source, {bool isVideo = false}) async {
     final file = isVideo
-        ? await _picker.pickVideo(source: source)
+        ? await _picker.pickVideo(
+            source: source,
+            maxDuration: const Duration(seconds: 10),
+          )
         : await _picker.pickImage(source: source, imageQuality: 85);
 
     if (file != null) {
@@ -228,6 +271,19 @@ class _InteractiveCreateReportTabState
       );
       return;
     }
+    if (!_locationPinned) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            AppLocale.instance.t(
+              'Pin the spot on the map or use your current location.',
+              'नक्सामा पिन गर्नुहोस् वा आफ्नो हालको स्थान प्रयोग गर्नुहोस्।',
+            ),
+          ),
+        ),
+      );
+      return;
+    }
     if (widget.profile.isBlacklisted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -239,21 +295,18 @@ class _InteractiveCreateReportTabState
 
     setState(() => _isSubmitting = true);
     try {
-      final location = await LocationService().captureCurrent();
-      setState(() {
-        _selectedLocation = LatLng(location.latitude, location.longitude);
-      });
       await ReportService().createReport(
         title: _selectedCategory!,
         description: _descController.text,
         category: _selectedCategory!,
         image: _isVideo ? null : _mediaFile,
         video: _isVideo ? _mediaFile : null,
-        latitude: location.latitude,
-        longitude: location.longitude,
-        locationTimestamp: location.timestamp,
+        latitude: _selectedLocation.latitude,
+        longitude: _selectedLocation.longitude,
+        locationTimestamp: DateTime.now(),
         municipality: _selectedMunicipality,
         address: _selectedMunicipality,
+        isAnonymous: _submitAnonymously,
       );
 
       if (!mounted) return;
@@ -277,6 +330,8 @@ class _InteractiveCreateReportTabState
         _mediaFile = null;
         _selectedCategory = null;
         _descController.clear();
+        _submitAnonymously = false;
+        _locationPinned = false;
       });
     } catch (e) {
       if (!mounted) return;
@@ -332,7 +387,7 @@ class _InteractiveCreateReportTabState
                 ),
                 const SizedBox(height: 10),
                 Container(
-                  height: 148,
+                  height: _mediaFile != null && _isVideo ? 200 : 148,
                   decoration: BoxDecoration(
                     color: const Color(0xFFF7FBF6),
                     borderRadius: BorderRadius.circular(16),
@@ -349,7 +404,7 @@ class _InteractiveCreateReportTabState
                             ),
                             _buildMediaTile(
                               icon: Icons.videocam_rounded,
-                              label: loc.t('Video', 'भिडियो'),
+                              label: loc.t('Video (10s)', 'भिडियो (१० से.)'),
                               onTap: () => _pickMedia(
                                 ImageSource.camera,
                                 isVideo: true,
@@ -366,12 +421,17 @@ class _InteractiveCreateReportTabState
                           children: [
                             ClipRRect(
                               borderRadius: BorderRadius.circular(16),
-                              child: Image.file(
-                                File(_mediaFile!.path),
-                                width: double.infinity,
-                                height: 148,
-                                fit: BoxFit.cover,
-                              ),
+                              child: _isVideo
+                                  ? XFileVideoPreview(
+                                      file: _mediaFile!,
+                                      width: double.infinity,
+                                      height: 200,
+                                    )
+                                  : XFilePreview(
+                                      file: _mediaFile!,
+                                      width: double.infinity,
+                                      height: 148,
+                                    ),
                             ),
                             Positioned(
                               top: 8,
@@ -383,19 +443,13 @@ class _InteractiveCreateReportTabState
                                     Icons.close,
                                     color: Colors.white,
                                   ),
-                                  onPressed: () =>
-                                      setState(() => _mediaFile = null),
+                                  onPressed: () => setState(() {
+                                    _mediaFile = null;
+                                    _isVideo = false;
+                                  }),
                                 ),
                               ),
                             ),
-                            if (_isVideo)
-                              const Center(
-                                child: Icon(
-                                  Icons.play_circle_fill_rounded,
-                                  color: Colors.white,
-                                  size: 48,
-                                ),
-                              ),
                           ],
                         ),
                 ),
@@ -458,35 +512,44 @@ class _InteractiveCreateReportTabState
                   Icons.my_location_rounded,
                 ),
                 const SizedBox(height: 10),
-                FilledButton.icon(
+                FilledButton(
                   onPressed: _locating ? null : _useCurrentLocation,
                   style: FilledButton.styleFrom(
-                    backgroundColor: kPrimaryGreen,
+                    backgroundColor: _locationPinned
+                        ? const Color(0xFF388E3C)
+                        : kPrimaryGreen,
                     foregroundColor: Colors.white,
                     minimumSize: const Size.fromHeight(44),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(14),
                     ),
                   ),
-                  icon: _locating
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : const Icon(Icons.gps_fixed_rounded),
-                  label: Text(
+                  child: Text(
                     _locating
                         ? loc.t('Finding you...', 'तपाईं खोजिँदै...')
+                        : _locationPinned
+                        ? loc.t('Location pinned', 'स्थान पिन भयो')
                         : loc.t(
                             'Use my current location',
                             'मेरो हालको स्थान प्रयोग गर्नुहोस्',
                           ),
                   ),
                 ),
+                if (_locationPinned) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    loc.t(
+                      'Pinned: ${_coordLabel()}  ·  tap the map or the button to change',
+                      'पिन: ${_coordLabel()}  ·  परिवर्तन गर्न नक्सा वा बटन थिच्नुहोस्',
+                    ),
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12,
+                      color: Color(0xFF1B5E20),
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 10),
                 ClipRRect(
                   borderRadius: BorderRadius.circular(16),
@@ -501,7 +564,8 @@ class _InteractiveCreateReportTabState
                             initialZoom: 14.5,
                             onTap: (tapPosition, point) {
                               HapticFeedback.selectionClick();
-                              setState(() => _selectedLocation = point);
+                              _pinLocation(point);
+                              _mapController.move(point, 16);
                             },
                           ),
                           children: [
@@ -540,7 +604,15 @@ class _InteractiveCreateReportTabState
                               borderRadius: BorderRadius.circular(12),
                             ),
                             child: Text(
-                              '${_selectedLocation.latitude.toStringAsFixed(5)}, ${_selectedLocation.longitude.toStringAsFixed(5)}',
+                              _locationPinned
+                                  ? loc.t(
+                                      'Location pinned · ${_coordLabel()}',
+                                      'स्थान पिन भयो · ${_coordLabel()}',
+                                    )
+                                  : loc.t(
+                                      'Tap the map to pin the spot',
+                                      'स्थान पिन गर्न नक्सामा थिच्नुहोस्',
+                                    ),
                               textAlign: TextAlign.center,
                               style: const TextStyle(
                                 fontWeight: FontWeight.w700,
@@ -572,8 +644,28 @@ class _InteractiveCreateReportTabState
               ],
             ),
           ),
+          const SizedBox(height: 14),
+          _formCard(
+            child: SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: Text(
+                loc.t('Submit anonymously', 'बेनामी पेश गर्नुहोस्'),
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+              subtitle: Text(
+                loc.t(
+                  'Officials will see the issue, not your name. Admin can still review your identity if needed for fraud.',
+                  'अधिकारीले समस्या देख्छन्, तपाईंको नाम होइन। जालसाजी जाँचका लागि एडमिनले पहिचान हेर्न सक्छन्।',
+                ),
+                style: const TextStyle(fontSize: 12),
+              ),
+              value: _submitAnonymously,
+              activeThumbColor: kPrimaryGreen,
+              onChanged: (value) => setState(() => _submitAnonymously = value),
+            ),
+          ),
           const SizedBox(height: 18),
-          FilledButton.icon(
+          FilledButton(
             onPressed: _isSubmitting ? null : _submitReport,
             style: FilledButton.styleFrom(
               backgroundColor: kPrimaryGreen,
@@ -583,10 +675,7 @@ class _InteractiveCreateReportTabState
                 borderRadius: BorderRadius.circular(16),
               ),
             ),
-            icon: _isSubmitting
-                ? const SizedBox.shrink()
-                : const Icon(Icons.send_rounded, color: Colors.white),
-            label: _isSubmitting
+            child: _isSubmitting
                 ? const SizedBox(
                     width: 24,
                     height: 24,
@@ -707,8 +796,8 @@ class _MyReportsTab extends StatelessWidget {
           return Center(
             child: Text(
               LocaleScope.of(context).t(
-                'Your reports and tracking IDs will show up here.',
-                'तपाईंका रिपोर्ट र ट्र्याकिङ आईडी यहाँ देखिन्छन्।',
+                'Your reports will show up here.',
+                'तपाईंका रिपोर्ट यहाँ देखिन्छन्।',
               ),
             ),
           );
@@ -725,31 +814,82 @@ class _MyReportsTab extends StatelessWidget {
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(16),
               ),
-              child: ListTile(
-                onTap: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) =>
-                          ReportDetailsPage(report: report, profile: profile),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  ListTile(
+                    onTap: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => ReportDetailsPage(
+                            report: report,
+                            profile: profile,
+                          ),
+                        ),
+                      );
+                    },
+                    leading: CircleAvatar(
+                      backgroundImage: StoredImage.provider(report.imageUrl),
+                      child: StoredImage.provider(report.imageUrl) == null
+                          ? Icon(
+                              report.hasPlayableVideo
+                                  ? Icons.videocam_rounded
+                                  : Icons.receipt_long_outlined,
+                            )
+                          : null,
                     ),
-                  );
-                },
-                leading: CircleAvatar(
-                  backgroundImage: StoredImage.provider(report.imageUrl),
-                  child: StoredImage.provider(report.imageUrl) == null
-                      ? const Icon(Icons.receipt_long_outlined)
-                      : null,
-                ),
-                title: Text(report.publicId),
-                subtitle: Text(
-                  '${AppLocale.instance.category(report.category)} · ${report.status.replaceAll('_', ' ')}',
-                ),
-                trailing: const Icon(Icons.chevron_right_rounded),
+                    title: Text(report.publicId),
+                    subtitle: Text(
+                      [
+                        if (report.isAnonymous) 'Anonymous',
+                        AppLocale.instance.category(report.category),
+                      ].join(' · '),
+                    ),
+                    trailing: _PublicReportStateChip(
+                      state: report.publicWorkState,
+                    ),
+                  ),
+                  if (report.hasPlayableVideo)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                      child: ReportVideoPlayer(report, height: 180),
+                    ),
+                ],
               ),
             );
           },
         );
       },
+    );
+  }
+}
+
+class _PublicReportStateChip extends StatelessWidget {
+  const _PublicReportStateChip({required this.state});
+
+  final String state;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = switch (state) {
+      'Completed' => const Color(0xFF2E7D32),
+      'Closed' => const Color(0xFFB71C1C),
+      _ => const Color(0xFFE65100),
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(
+        state,
+        style: TextStyle(
+          color: color,
+          fontSize: 12,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
     );
   }
 }

@@ -4,6 +4,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart';
 
+import 'package:hamro_fix/core/constants/app_constants.dart';
 import 'package:hamro_fix/core/l10n/app_locale.dart';
 import 'package:hamro_fix/models/public_model.dart';
 import 'package:hamro_fix/services/auth_messages.dart';
@@ -12,20 +13,41 @@ import 'package:hamro_fix/services/feed_service.dart';
 import 'package:hamro_fix/services/notification_service.dart';
 import 'package:hamro_fix/services/report_service.dart';
 import 'package:hamro_fix/widgets/stored_image.dart';
+import 'package:hamro_fix/widgets/stored_video.dart';
 
 class NotificationsTab extends StatelessWidget {
-  const NotificationsTab({super.key, required this.uid, this.profile});
+  const NotificationsTab({
+    super.key,
+    required this.uid,
+    this.profile,
+    this.staffMessagesOnly = false,
+  });
 
   final String uid;
   final UserProfile? profile;
+  final bool staffMessagesOnly;
 
   bool _canPost(AppNotification item) {
     if (profile == null || item.relatedId == null || item.relatedId!.isEmpty) {
       return false;
     }
-    return item.type == 'budget' ||
-        item.type == 'completed' ||
-        item.type == 'task';
+    if (!profile!.hasRole(UserRole.public)) return false;
+    return item.type == AlertType.budget;
+  }
+
+  List<AppNotification> _collapseBudgetAlerts(List<AppNotification> items) {
+    final seen = <String>{};
+    final collapsed = <AppNotification>[];
+    for (final item in items) {
+      if (item.type == AlertType.budget &&
+          item.relatedId != null &&
+          item.relatedId!.isNotEmpty) {
+        if (seen.contains(item.relatedId)) continue;
+        seen.add(item.relatedId!);
+      }
+      collapsed.add(item);
+    }
+    return collapsed;
   }
 
   @override
@@ -40,59 +62,180 @@ class NotificationsTab extends StatelessWidget {
         if (snapshot.hasError) {
           return Center(child: Text(AuthMessages.from(snapshot.error!)));
         }
-        final items = snapshot.data ?? [];
-        if (items.isEmpty) {
-          return Center(
-            child: Text(
-              loc.t('No notifications yet.', 'अहिले सूचना छैन।'),
-            ),
-          );
-        }
-        return ListView.separated(
+        final items = _collapseBudgetAlerts(
+          (snapshot.data ?? []).where((item) {
+            if (!item.visibleFor(profile)) return false;
+            if (staffMessagesOnly) return item.type == AlertType.message;
+            return item.type != AlertType.message;
+          }).toList(),
+        );
+        return ListView(
           padding: const EdgeInsets.all(16),
-          itemCount: items.length,
-          separatorBuilder: (_, __) => const SizedBox(height: 8),
-          itemBuilder: (context, index) {
-            final item = items[index];
-            return Card(
-              color: item.read ? Colors.white : const Color(0xFFE8F5E9),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
+          children: [
+            if (items.isEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 48),
+                child: Center(
+                  child: Text(
+                    loc.t(
+                      staffMessagesOnly
+                          ? 'No staff messages yet.'
+                          : 'No notifications yet.',
+                      staffMessagesOnly
+                          ? 'अहिले स्टाफ सन्देश छैन।'
+                          : 'अहिले सूचना छैन।',
+                    ),
+                  ),
+                ),
+              )
+            else
+              for (var index = 0; index < items.length; index++) ...[
+                if (index > 0) const SizedBox(height: 8),
+                _AlertCard(
+                  item: items[index],
+                  profile: profile,
+                  canPost: _canPost(items[index]),
+                ),
+              ],
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _AlertCard extends StatelessWidget {
+  const _AlertCard({
+    required this.item,
+    required this.profile,
+    required this.canPost,
+  });
+
+  final AppNotification item;
+  final UserProfile? profile;
+  final bool canPost;
+
+  String get _displayBody {
+    if (profile?.hasRole(UserRole.public) == true &&
+        item.type == AlertType.budget) {
+      const postLine = 'You can post this budget on the feed now.';
+      if (item.body.contains('You can post')) return item.body;
+      return '${item.body} $postLine';
+    }
+    return item.body;
+  }
+
+  Future<void> _open(BuildContext context) async {
+    if (!item.read) {
+      try {
+        await NotificationService().markRead(item.id);
+      } catch (_) {}
+    }
+    if (!context.mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (context) {
+        final when = item.createdAt;
+        final stamp = when == null
+            ? ''
+            : '${when.year}-${when.month.toString().padLeft(2, '0')}-${when.day.toString().padLeft(2, '0')} ${when.hour.toString().padLeft(2, '0')}:${when.minute.toString().padLeft(2, '0')}';
+        final from = [
+          if (item.senderName != null && item.senderName!.trim().isNotEmpty)
+            item.senderName!.trim(),
+          if (item.senderRole != null && item.senderRole!.trim().isNotEmpty)
+            item.senderRole!.trim(),
+        ].join(' · ');
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(20, 4, 20, 28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                item.title,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 18,
+                ),
+              ),
+              if (stamp.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Text(stamp, style: const TextStyle(color: Colors.black54)),
+              ],
+              if (from.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text(
+                  'From $from',
+                  style: const TextStyle(color: Colors.black54),
+                ),
+              ],
+              const SizedBox(height: 12),
+              Text(_displayBody, style: const TextStyle(height: 1.4)),
+              if (canPost &&
+                  profile != null &&
+                  item.relatedId != null &&
+                  item.relatedId!.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                ReportFeedPostButton(
+                  profile: profile!,
+                  reportId: item.relatedId!,
+                ),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      color: item.read ? Colors.white : const Color(0xFFE8F5E9),
+      child: InkWell(
+        onTap: () => _open(context),
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
                       item.title,
                       style: const TextStyle(fontWeight: FontWeight.w800),
                     ),
-                    const SizedBox(height: 4),
-                    Text(item.body),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        if (!item.read)
-                          TextButton(
-                            onPressed: () =>
-                                NotificationService().markRead(item.id),
-                            child: Text(loc.t('Mark read', 'पढियो')),
-                          ),
-                        const Spacer(),
-                        if (_canPost(item))
-                          ReportFeedPostButton(
-                            profile: profile!,
-                            reportId: item.relatedId!,
-                            onPosted: () =>
-                                NotificationService().markRead(item.id),
-                          ),
-                      ],
+                  ),
+                  if (!item.read)
+                    Container(
+                      width: 10,
+                      height: 10,
+                      decoration: const BoxDecoration(
+                        color: Color(0xFFC62828),
+                        shape: BoxShape.circle,
+                      ),
                     ),
-                  ],
-                ),
+                ],
               ),
-            );
-          },
-        );
-      },
+              const SizedBox(height: 4),
+              Text(
+                _displayBody,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'Tap to view details',
+                style: TextStyle(fontSize: 12, color: Colors.black54),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -367,13 +510,9 @@ class _MyFeedPageState extends State<_MyFeedPage> {
                       const Divider(height: 22),
                       Row(
                         children: [
-                          TextButton.icon(
+                          TextButton(
                             onPressed: _pick,
-                            icon: const Icon(
-                              Icons.photo_library_outlined,
-                              color: Color(0xFF2E7D32),
-                            ),
-                            label: Text(loc.t('Photo', 'फोटो')),
+                            child: Text(loc.t('Photo', 'फोटो')),
                           ),
                           const Spacer(),
                           FilledButton(
@@ -1041,6 +1180,14 @@ class _FeedPostCardState extends State<_FeedPostCard> {
             ),
           ),
           _FeedLinkedMedia(post: post),
+          if (post.text.trim().isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+              child: Text(
+                post.text,
+                style: const TextStyle(height: 1.35),
+              ),
+            ),
           Padding(
             padding: const EdgeInsets.fromLTRB(4, 2, 12, 12),
             child: Column(
@@ -1073,53 +1220,35 @@ class _FeedPostCardState extends State<_FeedPostCard> {
                       _syncedCount = comments;
                       FeedService().syncCommentCount(post.id, comments);
                     }
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                          child: Row(
-                            children: [
-                              Text(
-                                _likes == 1
-                                    ? loc.t('1 like', '१ लाइक')
-                                    : loc.t(
-                                        '$_likes likes',
-                                        '$_likes लाइक',
-                                      ),
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                              const SizedBox(width: 16),
-                              Text(
-                                comments == 1
-                                    ? loc.t('1 comment', '१ टिप्पणी')
-                                    : loc.t(
-                                        '$comments comments',
-                                        '$comments टिप्पणी',
-                                      ),
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        if (post.text.trim().isNotEmpty) ...[
-                          const SizedBox(height: 6),
-                          Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
+                    return Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                      child: Row(
+                        children: [
+                          Text(
+                            _likes == 1
+                                ? loc.t('1 like', '१ लाइक')
+                                : loc.t(
+                                    '$_likes likes',
+                                    '$_likes लाइक',
+                                  ),
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w700,
                             ),
-                            child: Text(
-                              post.text,
-                              style: const TextStyle(height: 1.35),
+                          ),
+                          const SizedBox(width: 16),
+                          Text(
+                            comments == 1
+                                ? loc.t('1 comment', '१ टिप्पणी')
+                                : loc.t(
+                                    '$comments comments',
+                                    '$comments टिप्पणी',
+                                  ),
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w700,
                             ),
                           ),
                         ],
-                        const SizedBox(height: 8),
-                      ],
+                      ),
                     );
                   },
                 ),
@@ -1141,11 +1270,18 @@ class _FeedLinkedMedia extends StatelessWidget {
   Widget build(BuildContext context) {
     final before = post.imageUrl;
     final after = post.afterImageUrl;
+    final video = post.videoUrl;
     if ((before == null || before.isEmpty) &&
-        (after == null || after.isEmpty)) {
+        (after == null || after.isEmpty) &&
+        (video == null || video.isEmpty)) {
       return const SizedBox.shrink();
     }
-    return _FeedMedia(before: before, after: after);
+    return Column(
+      children: [
+        if (video != null && video.isNotEmpty) StoredVideo(video, height: 240),
+        _FeedMedia(before: before, after: after),
+      ],
+    );
   }
 }
 

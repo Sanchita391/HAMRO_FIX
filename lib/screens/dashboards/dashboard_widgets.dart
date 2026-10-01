@@ -1,12 +1,24 @@
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
 import 'package:hamro_fix/core/l10n/app_locale.dart';
 import 'package:hamro_fix/models/public_model.dart';
+import 'package:hamro_fix/screens/auth/landing_page.dart';
 import 'package:hamro_fix/screens/reports/report_details_page.dart';
 import 'package:hamro_fix/widgets/stored_image.dart';
+import 'package:hamro_fix/widgets/web_narrow_body.dart';
+import 'package:hamro_fix/widgets/xfile_preview.dart';
 import 'package:hamro_fix/services/auth_messages.dart';
 import 'package:hamro_fix/services/auth_services.dart';
 import 'package:hamro_fix/services/report_service.dart';
+
+Widget badgedIcon(IconData icon, int count) {
+  return Badge(
+    isLabelVisible: count > 0,
+    label: Text('$count'),
+    child: Icon(icon),
+  );
+}
 
 class DashboardShell extends StatelessWidget {
   const DashboardShell({
@@ -93,40 +105,60 @@ Future<void> confirmAndLogout(BuildContext context) async {
   if (ok == true) await AuthServices().signOut();
 }
 
+class UserPhotoAvatar extends StatelessWidget {
+  const UserPhotoAvatar({
+    super.key,
+    required this.url,
+    required this.name,
+    this.radius = 20,
+  });
+
+  final String? url;
+  final String name;
+  final double radius;
+
+  @override
+  Widget build(BuildContext context) {
+    final initial = name.trim().isEmpty ? '?' : name.trim()[0].toUpperCase();
+    final provider = StoredImage.provider(url);
+    return CircleAvatar(
+      radius: radius,
+      backgroundColor: const Color(0xFFC8E6C9),
+      backgroundImage: provider,
+      child: provider == null
+          ? Text(
+              initial,
+              style: TextStyle(
+                fontWeight: FontWeight.w800,
+                fontSize: radius * 0.85,
+                color: const Color(0xFF1B5E20),
+              ),
+            )
+          : null,
+    );
+  }
+}
+
 class HamroFixBarTitle extends StatelessWidget {
   const HamroFixBarTitle({
     super.key,
     required this.subtitle,
     this.title = 'HamroFix',
+    this.photoUrl,
   });
 
   final String title;
   final String subtitle;
+  final String? photoUrl;
 
   @override
   Widget build(BuildContext context) {
     LocaleScope.of(context);
     return Row(
       children: [
-        Container(
-          padding: const EdgeInsets.all(6),
-          decoration: BoxDecoration(
-            color: const Color(0xFFE8F5E9),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0xFFA5D6A7)),
-          ),
-          child: Image.asset(
-            'assets/images/logo.png',
-            width: 28,
-            height: 28,
-            fit: BoxFit.contain,
-            errorBuilder: (_, __, ___) => const Icon(
-              Icons.shield_outlined,
-              size: 22,
-              color: Color(0xFF2E7D32),
-            ),
-          ),
-        ),
+        UserPhotoAvatar(url: photoUrl, name: subtitle, radius: 16),
+        const SizedBox(width: 10),
+        const HamroFixLogoBadge(size: 28, padding: 6),
         const SizedBox(width: 10),
         Expanded(
           child: Column(
@@ -175,6 +207,7 @@ class _ProfileTabState extends State<ProfileTab> {
   late final TextEditingController _phone;
   late final TextEditingController _username;
   bool _saving = false;
+  XFile? _newPhoto;
 
   @override
   void initState() {
@@ -194,6 +227,14 @@ class _ProfileTabState extends State<ProfileTab> {
     super.dispose();
   }
 
+  Future<void> _pickPhoto() async {
+    final file = await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 80,
+    );
+    if (file != null) setState(() => _newPhoto = file);
+  }
+
   Future<void> _save() async {
     setState(() => _saving = true);
     try {
@@ -201,6 +242,7 @@ class _ProfileTabState extends State<ProfileTab> {
         uid: widget.profile.uid,
         name: _name.text,
         phone: _phone.text,
+        profileImage: _newPhoto,
       );
       if (widget.profile.normalizedRole == UserRole.admin &&
           _username.text.trim().isNotEmpty) {
@@ -224,11 +266,17 @@ class _ProfileTabState extends State<ProfileTab> {
   Widget build(BuildContext context) {
     LocaleScope.of(context);
     final media = MediaQuery.of(context);
+    final hasPhoto =
+        _newPhoto != null ||
+        (widget.profile.profileImageUrl != null &&
+            widget.profile.profileImageUrl!.isNotEmpty);
     return MediaQuery(
       data: media.copyWith(
         textScaler: media.textScaler.clamp(minScaleFactor: 0.9, maxScaleFactor: 1.1),
       ),
-      child: ListView(
+      child: WebNarrowBody(
+        maxWidth: 520,
+        child: ListView(
       padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
       children: [
         Text(
@@ -240,36 +288,31 @@ class _ProfileTabState extends State<ProfileTab> {
         ),
         const SizedBox(height: 12),
         Center(
-          child: ClipOval(
-            child: SizedBox(
-              width: 72,
-              height: 72,
-              child: StoredImage.provider(widget.profile.profileImageUrl) == null
-                  ? ColoredBox(
-                      color: const Color(0xFFE8F5E9),
-                      child: Center(
-                        child: Text(
-                          widget.profile.name.isEmpty
-                              ? '?'
-                              : widget.profile.name[0].toUpperCase(),
-                          style: const TextStyle(
-                            fontSize: 22,
-                            fontWeight: FontWeight.w800,
-                            color: Color(0xFF2E7D32),
-                          ),
-                        ),
-                      ),
-                    )
-                  : StoredImage(
-                      widget.profile.profileImageUrl,
-                      width: 72,
-                      height: 72,
-                      fit: BoxFit.cover,
+          child: GestureDetector(
+            onTap: _pickPhoto,
+            child: _newPhoto != null
+                ? XFileCircleImage(file: _newPhoto!, radius: 44)
+                : UserPhotoAvatar(
+                    url: widget.profile.profileImageUrl,
+                    name: widget.profile.name,
+                    radius: 44,
+                  ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Center(
+          child: TextButton(
+            onPressed: _pickPhoto,
+            child: Text(
+              hasPhoto
+                  ? AppLocale.instance.t('Change photo', 'फोटो परिवर्तन गर्नुहोस्')
+                  : AppLocale.instance.t(
+                      'Add profile photo',
+                      'प्रोफाइल फोटो थप्नुहोस्',
                     ),
             ),
           ),
         ),
-        const SizedBox(height: 8),
         if (!widget.profile.hideContactEmail) ...[
           Text(
             AppLocale.instance.t(
@@ -306,16 +349,20 @@ class _ProfileTabState extends State<ProfileTab> {
           ),
         ],
         const SizedBox(height: 20),
-        FilledButton(
-          onPressed: _saving ? null : _save,
-          style: FilledButton.styleFrom(
-            backgroundColor: const Color(0xFF2E7D32),
-            foregroundColor: Colors.white,
-          ),
-          child: Text(
-            _saving
-                ? AppLocale.instance.t('Saving...', 'सेभ हुँदै...')
-                : AppLocale.instance.t('Save profile', 'प्रोफाइल सेभ गर्नुहोस्'),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: FilledButton(
+            onPressed: _saving ? null : _save,
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF2E7D32),
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+            ),
+            child: Text(
+              _saving
+                  ? AppLocale.instance.t('Saving...', 'सेभ हुँदै...')
+                  : AppLocale.instance.t('Save profile', 'प्रोफाइल सेभ गर्नुहोस्'),
+            ),
           ),
         ),
         const SizedBox(height: 28),
@@ -324,18 +371,21 @@ class _ProfileTabState extends State<ProfileTab> {
           style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
         ),
         const SizedBox(height: 12),
-        OutlinedButton.icon(
-          onPressed: () {
-            Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => ChangePasswordPage(profile: widget.profile),
-              ),
-            );
-          },
-          icon: const Icon(Icons.lock_reset_rounded),
-          label: Text(AppLocale.instance.t('Change password', 'पासवर्ड परिवर्तन')),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: OutlinedButton(
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => ChangePasswordPage(profile: widget.profile),
+                ),
+              );
+            },
+            child: Text(AppLocale.instance.t('Change password', 'पासवर्ड परिवर्तन')),
+          ),
         ),
       ],
+      ),
       ),
     );
   }
@@ -355,8 +405,6 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
   final _newPassword = TextEditingController();
   final _confirmPassword = TextEditingController();
   bool _changingPassword = false;
-  bool _obscureCurrent = true;
-  bool _obscureNew = true;
 
   @override
   void dispose() {
@@ -412,7 +460,9 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
     return Scaffold(
       backgroundColor: const Color(0xFFF6FBF6),
       appBar: AppBar(title: const Text('Change password')),
-      body: ListView(
+      body: WebNarrowBody(
+        maxWidth: 480,
+        child: ListView(
         padding: const EdgeInsets.all(20),
         children: [
           if (!widget.profile.hideContactEmail) ...[
@@ -424,34 +474,17 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
           ],
           TextField(
             controller: _currentPassword,
-            obscureText: _obscureCurrent,
-            decoration: InputDecoration(
+            obscureText: true,
+            decoration: const InputDecoration(
               labelText: 'Current password',
-              suffixIcon: IconButton(
-                onPressed: () =>
-                    setState(() => _obscureCurrent = !_obscureCurrent),
-                icon: Icon(
-                  _obscureCurrent
-                      ? Icons.visibility_off_outlined
-                      : Icons.visibility_outlined,
-                ),
-              ),
             ),
           ),
           const SizedBox(height: 12),
           TextField(
             controller: _newPassword,
-            obscureText: _obscureNew,
-            decoration: InputDecoration(
+            obscureText: true,
+            decoration: const InputDecoration(
               labelText: 'New password',
-              suffixIcon: IconButton(
-                onPressed: () => setState(() => _obscureNew = !_obscureNew),
-                icon: Icon(
-                  _obscureNew
-                      ? Icons.visibility_off_outlined
-                      : Icons.visibility_outlined,
-                ),
-              ),
             ),
           ),
           const SizedBox(height: 12),
@@ -463,11 +496,15 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
             ),
           ),
           const SizedBox(height: 20),
-          FilledButton(
-            onPressed: _changingPassword ? null : _changePassword,
-            child: Text(_changingPassword ? 'Updating...' : 'Update password'),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: FilledButton(
+              onPressed: _changingPassword ? null : _changePassword,
+              child: Text(_changingPassword ? 'Updating...' : 'Update password'),
+            ),
           ),
         ],
+      ),
       ),
     );
   }

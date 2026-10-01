@@ -5,12 +5,13 @@ import 'package:hamro_fix/core/l10n/app_locale.dart';
 import 'package:hamro_fix/core/theme/app_theme.dart';
 import 'package:hamro_fix/models/public_model.dart';
 import 'package:hamro_fix/screens/dashboards/dashboard_widgets.dart';
-import 'package:hamro_fix/screens/dashboards/shared_tabs.dart';
+import 'package:hamro_fix/screens/dashboards/staff_message_pages.dart';
 import 'package:hamro_fix/screens/dashboards/worker_payments_page.dart';
 import 'package:hamro_fix/screens/reports/report_details_page.dart';
 import 'package:hamro_fix/services/auth_messages.dart';
 import 'package:hamro_fix/services/notification_service.dart';
 import 'package:hamro_fix/services/report_service.dart';
+import 'package:hamro_fix/widgets/report_video_player.dart';
 import 'package:hamro_fix/widgets/stored_image.dart';
 
 bool _isOpenTask(ReportIssue item) {
@@ -47,9 +48,6 @@ class _WorkerDashboardState extends State<WorkerDashboard> {
         _seenTaskIds.addAll(openTasks.map((item) => item.id));
       }
     });
-    if (value == 3) {
-      await NotificationService().markAllRead(widget.profile.uid);
-    }
   }
 
   @override
@@ -70,9 +68,23 @@ class _WorkerDashboardState extends State<WorkerDashboard> {
         return StreamBuilder<List<AppNotification>>(
           stream: NotificationService().watchMine(widget.profile.uid),
           builder: (context, alertSnap) {
-            final unread = (alertSnap.data ?? [])
-                .where((item) => !item.read)
-                .length;
+            final unreadNotifications = AppNotification.unreadCount(
+              alertSnap.data ?? [],
+              excludeTypes: AlertType.messageBadge,
+              profile: widget.profile,
+            );
+            final unreadMessages = AppNotification.unreadCount(
+              alertSnap.data ?? [],
+              types: AlertType.messageBadge,
+              profile: widget.profile,
+            );
+            final unread = unreadNotifications + unreadMessages;
+            final unreadTasks = AppNotification.unreadCount(
+              alertSnap.data ?? [],
+              types: AlertType.taskBadge,
+              profile: widget.profile,
+            );
+            final taskBadge = unseen + unreadTasks;
             return Scaffold(
               backgroundColor: HamroFixTheme.canvas,
               appBar: AppBar(
@@ -81,6 +93,7 @@ class _WorkerDashboardState extends State<WorkerDashboard> {
                 automaticallyImplyLeading: false,
                 title: HamroFixBarTitle(
                   subtitle: widget.profile.displayName,
+                  photoUrl: widget.profile.profileImageUrl,
                 ),
                 actions: [
                   IconButton(
@@ -118,7 +131,11 @@ class _WorkerDashboardState extends State<WorkerDashboard> {
                         : null,
                   ),
                   WorkerPaymentsTab(profile: widget.profile),
-                  NotificationsTab(uid: widget.profile.uid),
+                  StaffAlertsHub(
+                    profile: widget.profile,
+                    unreadNotifications: unreadNotifications,
+                    unreadMessages: unreadMessages,
+                  ),
                   SafeArea(
                     child: ProfileTab(profile: widget.profile),
                   ),
@@ -136,15 +153,10 @@ class _WorkerDashboardState extends State<WorkerDashboard> {
                     label: loc.t('Home', 'गृह'),
                   ),
                   NavigationDestination(
-                    icon: Badge(
-                      isLabelVisible: unseen > 0,
-                      label: Text('$unseen'),
-                      child: const Icon(Icons.assignment_outlined),
-                    ),
-                    selectedIcon: Badge(
-                      isLabelVisible: unseen > 0,
-                      label: Text('$unseen'),
-                      child: const Icon(Icons.assignment_rounded),
+                    icon: badgedIcon(Icons.assignment_outlined, taskBadge),
+                    selectedIcon: badgedIcon(
+                      Icons.assignment_rounded,
+                      taskBadge,
                     ),
                     label: loc.t('Task', 'काम'),
                   ),
@@ -219,35 +231,47 @@ class _WorkerTaskList extends StatelessWidget {
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
           ),
-          child: ListTile(
-            onTap: () {
-              Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => ReportDetailsPage(
-                    report: report,
-                    profile: profile,
-                  ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              ListTile(
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => ReportDetailsPage(
+                        report: report,
+                        profile: profile,
+                      ),
+                    ),
+                  );
+                },
+                leading: CircleAvatar(
+                  backgroundColor: const Color(0xFFE8F5E9),
+                  backgroundImage: StoredImage.provider(report.imageUrl),
+                  child: StoredImage.provider(report.imageUrl) == null
+                      ? Icon(
+                          report.hasPlayableVideo
+                              ? Icons.videocam_rounded
+                              : Icons.assignment_rounded,
+                          color: HamroFixTheme.mediumGreen,
+                        )
+                      : null,
                 ),
-              );
-            },
-            leading: CircleAvatar(
-              backgroundColor: const Color(0xFFE8F5E9),
-              backgroundImage: StoredImage.provider(report.imageUrl),
-              child: StoredImage.provider(report.imageUrl) == null
-                  ? const Icon(
-                      Icons.assignment_rounded,
-                      color: HamroFixTheme.mediumGreen,
-                    )
-                  : null,
-            ),
-            title: Text(
-              report.title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontWeight: FontWeight.w700),
-            ),
-            subtitle: Text(report.publicId),
-            trailing: const Icon(Icons.chevron_right_rounded),
+                title: Text(
+                  report.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                subtitle: Text(report.publicId),
+                trailing: const Icon(Icons.chevron_right_rounded),
+              ),
+              if (report.hasPlayableVideo)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                  child: ReportVideoPlayer(report, height: 180),
+                ),
+            ],
           ),
         );
       },
@@ -397,7 +421,10 @@ class _WorkerHome extends StatelessWidget {
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(16),
                 ),
-                child: ListTile(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    ListTile(
                   onTap: () {
                     Navigator.of(context).push(
                       MaterialPageRoute<void>(
@@ -412,8 +439,10 @@ class _WorkerHome extends StatelessWidget {
                     backgroundColor: const Color(0xFFE8F5E9),
                     backgroundImage: StoredImage.provider(report.imageUrl),
                     child: StoredImage.provider(report.imageUrl) == null
-                        ? const Icon(
-                            Icons.handyman_rounded,
+                        ? Icon(
+                            report.hasPlayableVideo
+                                ? Icons.videocam_rounded
+                                : Icons.handyman_rounded,
                             color: HamroFixTheme.mediumGreen,
                           )
                         : null,
@@ -426,6 +455,13 @@ class _WorkerHome extends StatelessWidget {
                   ),
                   subtitle: Text(report.publicId),
                   trailing: const Icon(Icons.chevron_right_rounded),
+                ),
+                    if (report.hasPlayableVideo)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                        child: ReportVideoPlayer(report, height: 180),
+                      ),
+                  ],
                 ),
               ),
             ),

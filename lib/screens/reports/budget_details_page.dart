@@ -6,6 +6,7 @@ import 'package:hamro_fix/services/auth_messages.dart';
 import 'package:hamro_fix/services/budget_service.dart';
 import 'package:hamro_fix/services/report_service.dart';
 import 'package:hamro_fix/widgets/stored_image.dart';
+import 'package:hamro_fix/widgets/web_narrow_body.dart';
 import 'package:hamro_fix/widgets/worker_payment.dart';
 
 class BudgetDetailsPage extends StatefulWidget {
@@ -95,17 +96,20 @@ class _BudgetDetailsPageState extends State<BudgetDetailsPage> {
     return Scaffold(
       backgroundColor: HamroFixTheme.canvas,
       appBar: AppBar(title: const Text('Budget details')),
-      body: request.reportId.isEmpty
-          ? _buildBody(null)
-          : StreamBuilder(
-              stream: ReportService().watchReport(request.reportId),
-              builder: (context, snapshot) {
-                final report = snapshot.data?.exists == true
-                    ? ReportIssue.fromFirestore(snapshot.data!)
-                    : null;
-                return _buildBody(report);
-              },
-            ),
+      body: WebNarrowBody(
+        maxWidth: 720,
+        child: request.reportId.isEmpty
+            ? _buildBody(null)
+            : StreamBuilder(
+                stream: ReportService().watchReport(request.reportId),
+                builder: (context, snapshot) {
+                  final report = snapshot.data?.exists == true
+                      ? ReportIssue.fromFirestore(snapshot.data!)
+                      : null;
+                  return _buildBody(report);
+                },
+              ),
+      ),
     );
   }
 

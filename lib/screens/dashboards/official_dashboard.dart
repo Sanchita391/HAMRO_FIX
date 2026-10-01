@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import 'package:hamro_fix/core/constants/app_constants.dart';
@@ -5,7 +6,7 @@ import 'package:hamro_fix/core/l10n/app_locale.dart';
 import 'package:hamro_fix/core/theme/app_theme.dart';
 import 'package:hamro_fix/models/public_model.dart';
 import 'package:hamro_fix/screens/dashboards/dashboard_widgets.dart';
-import 'package:hamro_fix/screens/dashboards/shared_tabs.dart';
+import 'package:hamro_fix/screens/dashboards/staff_message_pages.dart';
 import 'package:hamro_fix/screens/reports/budget_details_page.dart';
 import 'package:hamro_fix/screens/reports/report_details_page.dart';
 import 'package:hamro_fix/services/auth_messages.dart';
@@ -16,7 +17,10 @@ import 'package:hamro_fix/services/report_service.dart';
 import 'package:hamro_fix/services/task_service.dart';
 import 'package:hamro_fix/widgets/application_review.dart';
 import 'package:hamro_fix/widgets/login_invite_sheet.dart';
+import 'package:hamro_fix/widgets/staff_dashboard_frame.dart';
+import 'package:hamro_fix/widgets/report_video_player.dart';
 import 'package:hamro_fix/widgets/stored_image.dart';
+import 'package:hamro_fix/widgets/web_narrow_body.dart';
 import 'package:hamro_fix/widgets/worker_payment.dart';
 
 class OfficialDashboard extends StatefulWidget {
@@ -30,9 +34,17 @@ class OfficialDashboard extends StatefulWidget {
 
 class _OfficialDashboardState extends State<OfficialDashboard> {
   int _index = 0;
+  String _reportsFilter = 'completed';
 
   Future<void> _logout() async {
     await confirmAndLogout(context);
+  }
+
+  void _openPage(int page, {String? reportsFilter}) {
+    setState(() {
+      _index = page;
+      if (reportsFilter != null) _reportsFilter = reportsFilter;
+    });
   }
 
   @override
@@ -41,93 +53,99 @@ class _OfficialDashboardState extends State<OfficialDashboard> {
     return StreamBuilder<List<AppNotification>>(
       stream: NotificationService().watchMine(widget.profile.uid),
       builder: (context, alertSnap) {
-        final unreadCount = (alertSnap.data ?? [])
-            .where((item) => !item.read)
-            .length;
+        final alerts = alertSnap.data ?? [];
+        final unreadCount = AppNotification.unreadCount(alerts);
+        final unreadNotifications = AppNotification.unreadCount(
+          alerts,
+          excludeTypes: AlertType.messageBadge,
+        );
+        final unreadMessages = AppNotification.unreadCount(
+          alerts,
+          types: AlertType.messageBadge,
+        );
+        final unreadReports = AppNotification.unreadCount(
+          alerts,
+          types: AlertType.reportBadge,
+        );
+        final unreadBudgets = AppNotification.unreadCount(
+          alerts,
+          types: AlertType.budgetBadge,
+        );
         return StreamBuilder<List<WorkerApplication>>(
           stream: AuthServices().watchWorkerApplications(),
           builder: (context, crewSnap) {
             final pendingCrew = (crewSnap.data ?? [])
                 .where((item) => item.status == AccountStatus.pending)
                 .length;
-            return Scaffold(
-              backgroundColor: HamroFixTheme.canvas,
-              appBar: AppBar(
-                backgroundColor: HamroFixTheme.canvas,
-                surfaceTintColor: Colors.transparent,
-                automaticallyImplyLeading: false,
-                titleSpacing: 16,
-                title: HamroFixBarTitle(
-                  title: loc.t(
-                    'Official Dashboard',
-                    'अधिकारी ड्यासबोर्ड',
-                  ),
-                  subtitle: widget.profile.displayName,
-                ),
-                actions: [
-                  IconButton(
-                    tooltip: loc.t('Log out', 'लग आउट'),
-                    onPressed: _logout,
-                    icon: const Icon(
-                      Icons.logout_rounded,
-                      color: HamroFixTheme.mediumGreen,
-                    ),
-                  ),
-                ],
+            return StaffDashboardFrame(
+              title: loc.t(
+                'Official Dashboard',
+                'अधिकारी ड्यासबोर्ड',
               ),
+              subtitle: widget.profile.displayName,
+              photoUrl: widget.profile.profileImageUrl,
+              selectedIndex: _index,
+              onSelect: (value) => setState(() => _index = value),
+              onLogout: _logout,
+              items: [
+                StaffNavItem(
+                  icon: const Icon(Icons.account_balance_outlined),
+                  selectedIcon: const Icon(Icons.account_balance_rounded),
+                  label: loc.t('Home', 'गृह'),
+                ),
+                StaffNavItem(
+                  icon: badgedIcon(Icons.assignment_outlined, unreadReports),
+                  selectedIcon: badgedIcon(
+                    Icons.assignment_rounded,
+                    unreadReports,
+                  ),
+                  label: loc.t('Reports', 'रिपोर्ट'),
+                ),
+                StaffNavItem(
+                  icon: Badge(
+                    isLabelVisible: pendingCrew > 0,
+                    label: Text('$pendingCrew'),
+                    child: const Icon(Icons.engineering_outlined),
+                  ),
+                  selectedIcon: Badge(
+                    isLabelVisible: pendingCrew > 0,
+                    label: Text('$pendingCrew'),
+                    child: const Icon(Icons.engineering_rounded),
+                  ),
+                  label: loc.t('Worker', 'कामदार'),
+                ),
+                StaffNavItem(
+                  icon: Badge(
+                    isLabelVisible: unreadCount > 0,
+                    label: Text('$unreadCount'),
+                    child: const Icon(Icons.apps_outlined),
+                  ),
+                  selectedIcon: Badge(
+                    isLabelVisible: unreadCount > 0,
+                    label: Text('$unreadCount'),
+                    child: const Icon(Icons.apps_rounded),
+                  ),
+                  label: loc.t('More', 'थप'),
+                ),
+              ],
               body: IndexedStack(
                 index: _index,
                 children: [
                   _OfficialHome(
                     profile: widget.profile,
-                    onOpen: (page) => setState(() => _index = page),
+                    onOpen: _openPage,
                   ),
-                  _OfficialReports(profile: widget.profile),
+                  _OfficialReports(
+                    profile: widget.profile,
+                    initialFilter: _reportsFilter,
+                  ),
                   _WorkerApprovalList(profile: widget.profile),
-                  _MoreTab(profile: widget.profile, unreadCount: unreadCount),
-                ],
-              ),
-              bottomNavigationBar: NavigationBar(
-                selectedIndex: _index,
-                onDestinationSelected: (value) =>
-                    setState(() => _index = value),
-                indicatorColor: const Color(0xFFC8E6C9),
-                destinations: [
-                  NavigationDestination(
-                    icon: const Icon(Icons.account_balance_outlined),
-                    selectedIcon: const Icon(Icons.account_balance_rounded),
-                    label: loc.t('Home', 'गृह'),
-                  ),
-                  NavigationDestination(
-                    icon: const Icon(Icons.assignment_outlined),
-                    selectedIcon: const Icon(Icons.assignment_rounded),
-                    label: loc.t('Reports', 'रिपोर्ट'),
-                  ),
-                  NavigationDestination(
-                    icon: Badge(
-                      isLabelVisible: pendingCrew > 0,
-                      label: Text('$pendingCrew'),
-                      child: const Icon(Icons.engineering_outlined),
-                    ),
-                    selectedIcon: Badge(
-                      isLabelVisible: pendingCrew > 0,
-                      label: Text('$pendingCrew'),
-                      child: const Icon(Icons.engineering_rounded),
-                    ),
-                    label: loc.t('Worker', 'कामदार'),
-                  ),
-                  NavigationDestination(
-                    icon: Badge(
-                      isLabelVisible: unreadCount > 0,
-                      label: Text('$unreadCount'),
-                      child: const Icon(Icons.apps_outlined),
-                    ),
-                    selectedIcon: Badge(
-                      isLabelVisible: unreadCount > 0,
-                      label: Text('$unreadCount'),
-                      child: const Icon(Icons.apps_rounded),
-                    ),
-                    label: loc.t('More', 'थप'),
+                  _MoreTab(
+                    profile: widget.profile,
+                    unreadCount: unreadCount,
+                    unreadBudgets: unreadBudgets,
+                    unreadNotifications: unreadNotifications,
+                    unreadMessages: unreadMessages,
                   ),
                 ],
               ),
@@ -143,7 +161,7 @@ class _OfficialHome extends StatelessWidget {
   const _OfficialHome({required this.profile, required this.onOpen});
 
   final UserProfile profile;
-  final ValueChanged<int> onOpen;
+  final void Function(int page, {String? reportsFilter}) onOpen;
 
   @override
   Widget build(BuildContext context) {
@@ -161,12 +179,17 @@ class _OfficialHome extends StatelessWidget {
                     child: Text(AuthMessages.from(reportsSnap.error!)),
                   );
                 }
-                final reports = reportsSnap.data ?? [];
+                final reports = List<ReportIssue>.from(
+                  reportsSnap.data ?? const <ReportIssue>[],
+                )..sort(ReportIssue.compareOfficialPriority);
                 final crew = crewSnap.data ?? [];
                 final budgets = budgetSnap.data ?? [];
                 final review = reports.where(_needsOfficialReview).toList();
                 final assign = reports.where(_needsAssignment).toList();
                 final funded = reports.where(_needsFundedDispatch).toList();
+                final completedWork = reports
+                    .where(_needsCompletionDispatch)
+                    .toList();
                 final pendingCrew = crew
                     .where((item) => item.status == AccountStatus.pending)
                     .toList();
@@ -183,7 +206,7 @@ class _OfficialHome extends StatelessWidget {
                     .toList();
 
                 return ListView(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                  padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
                   children: [
                     _HeroBanner(name: profile.name),
                     const SizedBox(height: 16),
@@ -208,8 +231,32 @@ class _OfficialHome extends StatelessWidget {
                             onTap: () => onOpen(2),
                           ),
                         ),
+                        if (MediaQuery.sizeOf(context).width >= 900) ...[
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: _StatCard(
+                              label: 'Need worker',
+                              value: '${assign.length}',
+                              icon: Icons.person_add_alt_1_rounded,
+                              color: const Color(0xFF1565C0),
+                              onTap: () => onOpen(1),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: _StatCard(
+                              label: 'Completed',
+                              value: '${completedWork.length}',
+                              icon: Icons.task_alt_rounded,
+                              color: const Color(0xFF2E7D32),
+                              onTap: () =>
+                                  onOpen(1, reportsFilter: 'completed'),
+                            ),
+                          ),
+                        ],
                       ],
                     ),
+                    if (MediaQuery.sizeOf(context).width < 900) ...[
                     const SizedBox(height: 10),
                     Row(
                       children: [
@@ -225,15 +272,17 @@ class _OfficialHome extends StatelessWidget {
                         const SizedBox(width: 10),
                         Expanded(
                           child: _StatCard(
-                            label: 'Funded',
-                            value: '${funded.length}',
-                            icon: Icons.payments_rounded,
-                            color: const Color(0xFF6A1B9A),
-                            onTap: () => onOpen(3),
+                            label: 'Completed',
+                            value: '${completedWork.length}',
+                            icon: Icons.task_alt_rounded,
+                            color: const Color(0xFF2E7D32),
+                            onTap: () =>
+                                onOpen(1, reportsFilter: 'completed'),
                           ),
                         ),
                       ],
                     ),
+                    ],
                     const SizedBox(height: 22),
                     _SectionHeader(
                       title: 'Needs your decision',
@@ -295,6 +344,30 @@ class _OfficialHome extends StatelessWidget {
                             (item) => Padding(
                               padding: const EdgeInsets.only(bottom: 10),
                               child: _OfficialBudgetCard(item: item),
+                            ),
+                          ),
+                    const SizedBox(height: 12),
+                    _SectionHeader(
+                      title: 'Completed by worker',
+                      action: completedWork.isEmpty ? null : 'See all',
+                      onAction: () =>
+                          onOpen(1, reportsFilter: 'completed'),
+                    ),
+                    if (completedWork.isEmpty)
+                      const _EmptyHint(
+                        icon: Icons.task_alt_rounded,
+                        text: 'No completed work waiting to send to the public.',
+                      )
+                    else
+                      ...completedWork
+                          .take(5)
+                          .map(
+                            (report) => Padding(
+                              padding: const EdgeInsets.only(bottom: 10),
+                              child: _HomeReportTile(
+                                report: report,
+                                profile: profile,
+                              ),
                             ),
                           ),
                     const SizedBox(height: 12),
@@ -547,49 +620,88 @@ class _HomeReportTile extends StatelessWidget {
       elevation: 0,
       color: Colors.white,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: ListTile(
-        onTap: () {
-          Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) =>
-                  ReportDetailsPage(report: report, profile: profile),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          ListTile(
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) =>
+                      ReportDetailsPage(report: report, profile: profile),
+                ),
+              );
+            },
+            leading: CircleAvatar(
+              backgroundColor: const Color(0xFFE8F5E9),
+              backgroundImage: StoredImage.provider(report.imageUrl),
+              child: StoredImage.provider(report.imageUrl) == null
+                  ? Icon(
+                      report.hasPlayableVideo
+                          ? Icons.videocam_rounded
+                          : Icons.report_outlined,
+                      color: HamroFixTheme.mediumGreen,
+                    )
+                  : null,
             ),
-          );
-        },
-        leading: CircleAvatar(
-          backgroundColor: const Color(0xFFE8F5E9),
-          backgroundImage: StoredImage.provider(report.imageUrl),
-          child: StoredImage.provider(report.imageUrl) == null
-              ? const Icon(
-                  Icons.report_outlined,
-                  color: HamroFixTheme.mediumGreen,
-                )
-              : null,
-        ),
-        title: Text(
-          report.title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontWeight: FontWeight.w700),
-        ),
-        subtitle: Text('${report.category} · ${_pretty(report.status)}'),
-        trailing: const Icon(Icons.chevron_right_rounded),
+            title: Text(
+              report.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+            subtitle: Text(
+              [
+                if (report.isAnonymous) 'Anonymous',
+                report.category,
+                if (_needsCompletionDispatch(report))
+                  'Worker completed · send to public'
+                else
+                  _pretty(report.status),
+              ].join(' · '),
+            ),
+            trailing: const Icon(Icons.chevron_right_rounded),
+          ),
+          if (report.hasPlayableVideo)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+              child: ReportVideoPlayer(report, height: 180),
+            ),
+        ],
       ),
     );
   }
 }
 
 class _OfficialReports extends StatefulWidget {
-  const _OfficialReports({required this.profile});
+  const _OfficialReports({
+    required this.profile,
+    required this.initialFilter,
+  });
 
   final UserProfile profile;
+  final String initialFilter;
 
   @override
   State<_OfficialReports> createState() => _OfficialReportsState();
 }
 
 class _OfficialReportsState extends State<_OfficialReports> {
-  String _filter = 'review';
+  late String _filter;
+
+  @override
+  void initState() {
+    super.initState();
+    _filter = widget.initialFilter;
+  }
+
+  @override
+  void didUpdateWidget(covariant _OfficialReports oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.initialFilter != widget.initialFilter) {
+      _filter = widget.initialFilter;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -622,22 +734,13 @@ class _OfficialReportsState extends State<_OfficialReports> {
             final all = List<ReportIssue>.from(
               snapshot.data ?? const <ReportIssue>[],
             );
-            final items = switch (_filter) {
-              'review' => all.where(_needsOfficialReview).toList(),
-              'assign' => all.where(_needsAssignment).toList(),
-              'funded' => all.where(_needsFundedDispatch).toList(),
-              'photos' => all.where(_needsCompletionDispatch).toList(),
-              'open' =>
-                all
-                    .where(
-                      (item) =>
-                          item.status != ReportStatus.completed &&
-                          item.status != ReportStatus.verifiedFake &&
-                          item.status != ReportStatus.officialDeclined,
-                    )
-                    .toList(),
+            final items = List<ReportIssue>.from(switch (_filter) {
+              'review' => all.where(_needsOfficialReview),
+              'assign' => all.where(_needsAssignment),
+              'funded' => all.where(_needsFundedDispatch),
+              'completed' => all.where(_needsCompletionDispatch),
               _ => all,
-            };
+            })..sort(ReportIssue.compareOfficialPriority);
             return Column(
               children: [
                 SingleChildScrollView(
@@ -649,8 +752,7 @@ class _OfficialReportsState extends State<_OfficialReports> {
                         ('review', 'Review'),
                         ('assign', 'Assign'),
                         ('funded', 'Funded'),
-                        ('photos', 'Photos'),
-                        ('open', 'Open'),
+                        ('completed', 'Completed'),
                         ('all', 'All'),
                       ])
                         Padding(
@@ -735,6 +837,7 @@ class _OfficialReportCardState extends State<_OfficialReportCard> {
       context: context,
       workers: widget.workers,
       selectedIds: widget.report.crewIds,
+      reportCategory: widget.report.category,
     );
     if (selected == null || selected.isEmpty) return;
     await _run(
@@ -742,8 +845,11 @@ class _OfficialReportCardState extends State<_OfficialReportCard> {
         reportId: widget.report.id,
         workerIds: selected.map((person) => person.uid).toList(),
         workerNames: selected.map((person) => person.name).toList(),
+        report: widget.report,
       ),
-      'Assigned ${selected.length} worker(s).',
+      widget.report.crewIds.isEmpty
+          ? 'Assigned ${selected.length} worker(s).'
+          : 'Extra worker(s) added to this task.',
     );
   }
 
@@ -759,7 +865,7 @@ class _OfficialReportCardState extends State<_OfficialReportCard> {
         instructions:
             'Complete funded work for ${report.publicId}. Approved budget NPR ${report.approvedBudgetAmount?.toStringAsFixed(0) ?? '0'}.',
       ),
-      'Approved budget sent to the inspecting worker and the public reporter.',
+      'Approved budget sent to the worker and the public reporter.',
     );
   }
 
@@ -777,74 +883,89 @@ class _OfficialReportCardState extends State<_OfficialReportCard> {
     final assign = _needsAssignment(report);
     return Card(
       elevation: 0,
-      color: Colors.white,
+      color: report.isAnonymous ? const Color(0xFFEEEEEE) : Colors.white,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(16),
-        onTap: () {
-          Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) =>
-                  ReportDetailsPage(report: report, profile: widget.profile),
-            ),
-          );
-        },
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  CircleAvatar(
-                    backgroundColor: const Color(0xFFE8F5E9),
-                    backgroundImage: StoredImage.provider(report.imageUrl),
-                    child: StoredImage.provider(report.imageUrl) == null
-                        ? const Icon(
-                            Icons.report_outlined,
-                            color: HamroFixTheme.mediumGreen,
-                          )
-                        : null,
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          report.title,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontWeight: FontWeight.w800),
-                        ),
-                        Text(
-                          '${report.publicId} · ${report.category}',
-                          style: const TextStyle(
-                            color: Colors.black54,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ],
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            InkWell(
+              borderRadius: BorderRadius.circular(12),
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => ReportDetailsPage(
+                      report: report,
+                      profile: widget.profile,
                     ),
                   ),
-                  _StatusChip(status: report.status),
+                );
+              },
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      CircleAvatar(
+                        backgroundColor: const Color(0xFFE8F5E9),
+                        backgroundImage: StoredImage.provider(report.imageUrl),
+                        child: StoredImage.provider(report.imageUrl) == null
+                            ? Icon(
+                                report.hasPlayableVideo
+                                    ? Icons.videocam_rounded
+                                    : Icons.report_outlined,
+                                color: HamroFixTheme.mediumGreen,
+                              )
+                            : null,
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              report.title,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontWeight: FontWeight.w800),
+                            ),
+                            Text(
+                              [
+                                report.publicId,
+                                report.category,
+                                if (report.isAnonymous) 'Anonymous',
+                              ].join(' · '),
+                              style: const TextStyle(
+                                color: Colors.black54,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      _StatusChip(status: report.status),
+                    ],
+                  ),
+                  if (report.description.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      report.description,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                  if (report.crewLabel.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      'Workers: ${report.crewLabel}',
+                      style: const TextStyle(color: Colors.black54, fontSize: 12),
+                    ),
+                  ],
                 ],
               ),
-              if (report.description.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                Text(
-                  report.description,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
-              if (report.crewLabel.isNotEmpty) ...[
-                const SizedBox(height: 6),
-                Text(
-                  'Workers: ${report.crewLabel}',
-                  style: const TextStyle(color: Colors.black54, fontSize: 12),
-                ),
-              ],
+            ),
+            ReportVideoPlayer(report, height: 200),
               if (review) ...[
                 const SizedBox(height: 12),
                 Row(
@@ -886,15 +1007,14 @@ class _OfficialReportCardState extends State<_OfficialReportCard> {
                 const SizedBox(height: 12),
                 SizedBox(
                   width: double.infinity,
-                  child: FilledButton.icon(
+                  child: FilledButton(
                     onPressed: _busy ? null : _pickWorker,
-                    icon: const Icon(Icons.engineering_rounded, size: 18),
-                    label: Text(
+                    child: Text(
                       _busy
                           ? 'Working...'
                           : report.crewIds.isEmpty
                           ? 'Assign workers'
-                          : 'Change workers (${report.crewIds.length})',
+                          : 'Add more workers',
                     ),
                   ),
                 ),
@@ -903,14 +1023,22 @@ class _OfficialReportCardState extends State<_OfficialReportCard> {
                 const SizedBox(height: 12),
                 SizedBox(
                   width: double.infinity,
-                  child: FilledButton.icon(
+                  child: FilledButton(
                     onPressed: _busy ? null : _sendFunded,
-                    icon: const Icon(Icons.send_rounded, size: 18),
-                    label: Text(
+                    child: Text(
                       _busy
                           ? 'Sending...'
-                          : 'Send budget to inspector & public',
+                          : 'Send budget to worker & public',
                     ),
+                  ),
+                ),
+              ] else if (report.isFundedBudgetSent) ...[
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton(
+                    onPressed: null,
+                    child: const Text('Done · budget sent'),
                   ),
                 ),
               ],
@@ -918,10 +1046,9 @@ class _OfficialReportCardState extends State<_OfficialReportCard> {
                 const SizedBox(height: 12),
                 SizedBox(
                   width: double.infinity,
-                  child: FilledButton.icon(
+                  child: FilledButton(
                     onPressed: _busy ? null : _sendCompletion,
-                    icon: const Icon(Icons.photo_library_outlined, size: 18),
-                    label: Text(
+                    child: Text(
                       _busy
                           ? 'Sending...'
                           : 'Send completed photos to public',
@@ -932,7 +1059,6 @@ class _OfficialReportCardState extends State<_OfficialReportCard> {
             ],
           ),
         ),
-      ),
     );
   }
 }
@@ -1023,7 +1149,7 @@ class _OfficialBudgetCardState extends State<_OfficialBudgetCard> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
-              'Approved budget sent to the inspecting worker and the public reporter.',
+              'Approved budget sent to the worker and the public reporter.',
             ),
           ),
         );
@@ -1131,18 +1257,41 @@ class _OfficialBudgetCardState extends State<_OfficialBudgetCard> {
                 ),
               ),
             ],
-            if (item.status == BudgetStatus.finalApproved) ...[
-              const SizedBox(height: 12),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton(
-                  onPressed: _busy ? null : _sendFunded,
-                  child: Text(
-                    _busy ? 'Sending...' : 'Send to inspector & public',
-                  ),
-                ),
-              ),
-            ],
+            StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+              stream: ReportService().watchReport(item.reportId),
+              builder: (context, snap) {
+                ReportIssue? linked;
+                final doc = snap.data;
+                if (doc != null && doc.exists) {
+                  linked = ReportIssue.fromFirestore(doc);
+                }
+                final sent = item.status == BudgetStatus.sentToWorker ||
+                    (linked?.isFundedBudgetSent ?? false);
+                final canSend =
+                    item.status == BudgetStatus.finalApproved && !sent;
+                if (!canSend && !sent) {
+                  return const SizedBox.shrink();
+                }
+                return Column(
+                  children: [
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton(
+                        onPressed: sent || _busy ? null : _sendFunded,
+                        child: Text(
+                          _busy
+                              ? 'Sending...'
+                              : sent
+                              ? 'Done · budget sent'
+                              : 'Send to worker & public',
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
           ],
         ),
       ),
@@ -1151,10 +1300,19 @@ class _OfficialBudgetCardState extends State<_OfficialBudgetCard> {
 }
 
 class _MoreTab extends StatelessWidget {
-  const _MoreTab({required this.profile, required this.unreadCount});
+  const _MoreTab({
+    required this.profile,
+    required this.unreadCount,
+    required this.unreadBudgets,
+    required this.unreadNotifications,
+    required this.unreadMessages,
+  });
 
   final UserProfile profile;
   final int unreadCount;
+  final int unreadBudgets;
+  final int unreadNotifications;
+  final int unreadMessages;
 
   @override
   Widget build(BuildContext context) {
@@ -1166,13 +1324,14 @@ class _MoreTab extends StatelessWidget {
           color: const Color(0xFF6A1B9A),
           title: 'Budgets',
           subtitle: 'Review worker estimates and forward to admin',
+          badge: unreadBudgets,
           onTap: () {
             Navigator.of(context).push(
               MaterialPageRoute<void>(
-                builder: (_) => Scaffold(
-                  backgroundColor: HamroFixTheme.canvas,
-                  appBar: AppBar(title: const Text('Budgets')),
-                  body: const _OfficialBudgets(),
+                builder: (_) => WebPageScaffold(
+                  title: 'Budgets',
+                  maxWidth: 720,
+                  body: _OfficialBudgets(),
                 ),
               ),
             );
@@ -1182,22 +1341,29 @@ class _MoreTab extends StatelessWidget {
         _MoreTile(
           icon: Icons.notifications_rounded,
           color: const Color(0xFFE65100),
-          title: 'Alerts',
-          subtitle: unreadCount == 0
-              ? 'No unread alerts'
-              : '$unreadCount unread alert${unreadCount == 1 ? '' : 's'}',
-          badge: unreadCount,
-          onTap: () {
-            Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => Scaffold(
-                  backgroundColor: HamroFixTheme.canvas,
-                  appBar: AppBar(title: const Text('Alerts')),
-                  body: NotificationsTab(uid: profile.uid),
-                ),
-              ),
-            );
-          },
+          title: 'Notifications',
+          subtitle: unreadNotifications == 0
+              ? 'Report and budget updates'
+              : '$unreadNotifications unread notification${unreadNotifications == 1 ? '' : 's'}',
+          badge: unreadNotifications,
+          onTap: () => openNotificationsPage(context, profile),
+        ),
+        const SizedBox(height: 10),
+        _MoreTile(
+          icon: Icons.mail_rounded,
+          color: const Color(0xFF1565C0),
+          title: 'Messages',
+          subtitle: 'From workers and admin',
+          badge: unreadMessages,
+          onTap: () => openStaffMessagesPage(context, profile),
+        ),
+        const SizedBox(height: 10),
+        _MoreTile(
+          icon: Icons.send_rounded,
+          color: HamroFixTheme.mediumGreen,
+          title: 'Send alert',
+          subtitle: 'Write an extra note to a worker or admin',
+          onTap: () => openSendAlertPage(context, profile),
         ),
         const SizedBox(height: 10),
         _MoreTile(
@@ -1208,9 +1374,9 @@ class _MoreTab extends StatelessWidget {
           onTap: () {
             Navigator.of(context).push(
               MaterialPageRoute<void>(
-                builder: (_) => Scaffold(
-                  backgroundColor: HamroFixTheme.canvas,
-                  appBar: AppBar(title: const Text('Profile')),
+                builder: (_) => WebPageScaffold(
+                  title: 'Profile',
+                  maxWidth: 640,
                   body: ProfileTab(profile: profile),
                 ),
               ),
@@ -1548,8 +1714,7 @@ class _BusyWorkerCard extends StatelessWidget {
               ),
               subtitle: Text(
                 [
-                  if ((worker.specialization ?? '').isNotEmpty)
-                    worker.specialization!,
+                  if (worker.specialtyLabel.isNotEmpty) worker.specialtyLabel,
                   jobs.isEmpty
                       ? 'Available · not assigned to any task'
                       : '${jobs.length} open task${jobs.length == 1 ? '' : 's'}',
@@ -1821,9 +1986,7 @@ class _WorkerAppCardState extends State<_WorkerAppCard> {
               ),
               subtitle: Text(
                 [
-                  if (app.specialization != null &&
-                      app.specialization!.isNotEmpty)
-                    app.specialization!,
+                  if (app.specialtyLabel.isNotEmpty) app.specialtyLabel,
                   if (app.municipality != null && app.municipality!.isNotEmpty)
                     app.municipality!,
                   if (app.phone.isNotEmpty) app.phone,
@@ -1834,13 +1997,12 @@ class _WorkerAppCardState extends State<_WorkerAppCard> {
             ),
             SizedBox(
               width: double.infinity,
-              child: OutlinedButton.icon(
+              child: OutlinedButton(
                 onPressed: () => showWorkerApplicationReview(
                   context: context,
                   application: app,
                 ),
-                icon: const Icon(Icons.badge_outlined),
-                label: const Text('View all details & photos'),
+                child: const Text('View all details & photos'),
               ),
             ),
             const SizedBox(height: 8),
@@ -1904,10 +2066,9 @@ class _WorkerAppCardState extends State<_WorkerAppCard> {
             const SizedBox(height: 8),
             SizedBox(
               width: double.infinity,
-              child: OutlinedButton.icon(
+              child: OutlinedButton(
                 onPressed: _busy ? null : _invite,
-                icon: const Icon(Icons.mark_email_read_outlined),
-                label: const Text('Send email & password'),
+                child: const Text('Send email & password'),
               ),
             ),
             if (!pending &&
@@ -1917,7 +2078,7 @@ class _WorkerAppCardState extends State<_WorkerAppCard> {
               Row(
                 children: [
                   Expanded(
-                    child: OutlinedButton.icon(
+                    child: OutlinedButton(
                       onPressed: _busy
                           ? null
                           : () => _reasonAction(
@@ -1932,13 +2093,12 @@ class _WorkerAppCardState extends State<_WorkerAppCard> {
                                   ),
                               done: 'Worker blacklisted.',
                             ),
-                      icon: const Icon(Icons.gpp_bad_outlined, size: 18),
-                      label: const Text('Blacklist'),
+                      child: const Text('Blacklist'),
                     ),
                   ),
                   const SizedBox(width: 10),
                   Expanded(
-                    child: OutlinedButton.icon(
+                    child: OutlinedButton(
                       onPressed: _busy
                           ? null
                           : () => _reasonAction(
@@ -1953,8 +2113,7 @@ class _WorkerAppCardState extends State<_WorkerAppCard> {
                                   ),
                               done: 'Worker profile deleted.',
                             ),
-                      icon: const Icon(Icons.delete_outline_rounded, size: 18),
-                      label: const Text('Delete'),
+                      child: const Text('Delete'),
                     ),
                   ),
                 ],
@@ -1974,6 +2133,7 @@ bool _needsOfficialReview(ReportIssue report) {
 }
 
 bool _needsAssignment(ReportIssue report) {
+  if (report.crewIds.isNotEmpty) return _isBusyJob(report);
   return report.status == ReportStatus.officialAccepted ||
       report.status == ReportStatus.verifiedValid ||
       report.status == ReportStatus.workerAssigned ||
@@ -1985,7 +2145,7 @@ bool _needsFundedDispatch(ReportIssue report) {
 }
 
 bool _needsCompletionDispatch(ReportIssue report) {
-  return report.status == ReportStatus.workCompleted;
+  return report.awaitingOfficialCompletion;
 }
 
 bool _isBusyJob(ReportIssue report) {

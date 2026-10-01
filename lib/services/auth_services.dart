@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:image_picker/image_picker.dart';
 
 import 'package:hamro_fix/core/utils/secure_password.dart';
@@ -9,6 +10,7 @@ import 'package:hamro_fix/services/auth_messages.dart';
 import 'package:hamro_fix/services/notification_service.dart';
 import 'package:hamro_fix/services/storage_service.dart';
 
+// Handles Firebase Auth plus user profiles in Firestore (users, applications).
 class AuthServices {
   AuthServices({
     FirebaseAuth? auth,
@@ -35,9 +37,11 @@ class AuthServices {
   static const _usernameIndex = 'username_index';
 
   User? get currentUser => _auth.currentUser;
+  // Used by AuthGate to know when someone signs in or out.
   Stream<User?> get authStateChanges => _auth.authStateChanges();
   Stream<User?> get userChanges => _auth.userChanges();
 
+  // Store phones as +977... so login-by-phone can look them up.
   String formatNepaliPhone(String phone) {
     final digits = phone.trim().replaceAll(RegExp(r'[\s-]'), '');
     if (digits.startsWith('+977')) return digits;
@@ -53,6 +57,7 @@ class AuthServices {
     await Future<void>.delayed(const Duration(milliseconds: 250));
   }
 
+  // Create a public Auth user and a users/{uid} document, then send a verify email.
   Future<UserCredential> registerCitizen({
     required String fullName,
     required String email,
@@ -129,6 +134,7 @@ class AuthServices {
     }
   }
 
+  // Create a worker Auth account as pending, save the application, then sign out.
   Future<void> registerWorker({
     required String fullName,
     required String email,
@@ -183,6 +189,7 @@ class AuthServices {
     }
   }
 
+  // Save worker photos and the workerApplications document for official review.
   Future<void> _submitWorkerApplication({
     required String uid,
     required String fullName,
@@ -246,6 +253,7 @@ class AuthServices {
         profileImageUrl: profileImageUrl,
         extra: {
           'specialization': extra['specialization'],
+          'specializations': extra['specializations'],
           'district': extra['district'],
           'municipality': extra['municipality'],
           'mustChangePassword': true,
@@ -258,6 +266,7 @@ class AuthServices {
           .set(
             {
               'specialization': extra['specialization'],
+              'specializations': extra['specializations'],
               'district': extra['district'],
               'municipality': extra['municipality'],
               if (profileImageUrl != null) 'profileImageUrl': profileImageUrl,
@@ -303,6 +312,7 @@ class AuthServices {
     }
   }
 
+  // Create a pending official account and application. Admin must approve later.
   Future<void> requestOfficialAccess({
     required String fullName,
     required String email,
@@ -389,6 +399,7 @@ class AuthServices {
     }
   }
 
+  // Sign in with email/password, then check the Firestore role matches this page.
   Future<UserCredential> loginWithEmail({
     required String email,
     required String password,
@@ -402,18 +413,25 @@ class AuthServices {
       email: email.trim(),
       password: password.trim(),
     );
+    final user = credential.user;
+    if (user == null) {
+      throw FirebaseAuthException(code: 'user-not-found');
+    }
+    // On web the Auth token is sometimes not ready for Firestore yet.
+    try {
+      await _ensureAuthToken(user);
+    } catch (_) {}
     try {
       await _assertLoginProfile(
-        uid: credential.user?.uid,
+        uid: user.uid,
         expectedRole: expectedRole,
         employeeId: employeeId,
       );
-      final uid = credential.user?.uid;
-      if (uid != null) {
-        await _notifications.saveFcmToken(uid);
-        if (expectedRole == UserRole.admin) {
-          await _ensureAdminUsernameIndex(uid);
-        }
+      try {
+        await _notifications.saveFcmToken(user.uid);
+      } catch (_) {}
+      if (expectedRole == UserRole.admin) {
+        await _ensureAdminUsernameIndex(user.uid);
       }
       return credential;
     } catch (e) {
@@ -422,6 +440,7 @@ class AuthServices {
     }
   }
 
+  // Public sign-in page: same as loginWithEmail, but the role must be public.
   Future<UserCredential> loginCitizen({
     required String email,
     required String password,
@@ -433,6 +452,7 @@ class AuthServices {
     );
   }
 
+  // Admin can type username or email. Username is looked up in username_index.
   Future<UserCredential> loginAdmin({
     required String identifier,
     required String password,
@@ -448,6 +468,55 @@ class AuthServices {
       email: email,
       password: password,
       expectedRole: UserRole.admin,
+    );
+  }
+
+  // Web management portal: Firebase email/password, then Official or Admin only.
+  Future<UserCredential> loginStaffWeb({
+    required String identifier,
+    required String password,
+    required String expectedRole,
+    bool rememberMe = true,
+  }) async {
+    // Keep the session in this browser tab only when Remember me is off.
+    if (kIsWeb) {
+      await _auth.setPersistence(
+        rememberMe ? Persistence.LOCAL : Persistence.SESSION,
+      );
+    }
+
+    final trimmed = identifier.trim();
+    final email = trimmed.contains('@')
+        ? trimmed
+        : (expectedRole == UserRole.admin
+              ? await _resolveAdminEmail(trimmed)
+              : trimmed);
+
+    // Sign in the user using Firebase Authentication.
+    final credential = await loginWithEmail(
+      email: email,
+      password: password,
+      expectedRole: expectedRole,
+    );
+
+    // Check the user's role matches Official or Admin on this website.
+    final uid = credential.user?.uid;
+    final profile = uid == null ? null : await fetchProfile(uid);
+    final role = UserRole.normalize(profile?.role);
+    if (role == UserRole.official || role == UserRole.admin) {
+      if (role == UserRole.admin && uid != null) {
+        await _ensureAdminUsernameIndex(uid);
+      }
+      return credential;
+    }
+    if (uid != null && profile == null) {
+      final pending = await hasPendingOfficialRequest(uid);
+      if (pending && expectedRole == UserRole.official) return credential;
+    }
+
+    await _auth.signOut();
+    throw const AuthFailure(
+      'This platform is restricted to authorised Official and Admin users. Public and field workers must use the HamroFix phone app.',
     );
   }
 
@@ -474,6 +543,7 @@ class AuthServices {
     } catch (_) {}
   }
 
+  // Save the admin username so they can sign in without typing the full email.
   Future<void> saveAdminUsername(String username) async {
     final user = _auth.currentUser;
     if (user == null || user.email == null) {
@@ -492,6 +562,7 @@ class AuthServices {
     });
   }
 
+  // Look up the Auth email from phone_index, then sign in as usual.
   Future<UserCredential> loginWithPhone({
     required String phone,
     required String password,
@@ -516,16 +587,35 @@ class AuthServices {
     );
   }
 
+  // Firebase Auth sends a reset link to this email.
   Future<void> sendPasswordReset(String email) {
     return _auth.sendPasswordResetEmail(email: email.trim());
   }
 
+  // Read one user document from Firestore.
   Future<UserProfile?> fetchProfile(String uid) async {
-    final doc = await _firestore.collection(_users).doc(uid).get();
-    if (!doc.exists) return null;
-    return UserProfile.fromFirestore(doc);
+    try {
+      final doc = await _firestore.collection(_users).doc(uid).get();
+      if (!doc.exists) return null;
+      return UserProfile.fromFirestore(doc);
+    } on FirebaseException catch (e) {
+      if (e.code != 'permission-denied' && e.code != 'unauthenticated') {
+        rethrow;
+      }
+      // Token may not be attached yet (common in Chrome). Wait, then read once more.
+      final user = _auth.currentUser;
+      if (user != null) {
+        try {
+          await _ensureAuthToken(user);
+        } catch (_) {}
+      }
+      final retry = await _firestore.collection(_users).doc(uid).get();
+      if (!retry.exists) return null;
+      return UserProfile.fromFirestore(retry);
+    }
   }
 
+  // Live updates of the same user document (used after login).
   Stream<UserProfile?> watchProfile(String uid) {
     return _firestore.collection(_users).doc(uid).snapshots().map((doc) {
       if (!doc.exists) return null;
@@ -533,6 +623,7 @@ class AuthServices {
     });
   }
 
+  // Update name, phone, and optional profile photo on the current user.
   Future<void> updateOwnProfile({
     required String uid,
     required String name,
@@ -555,6 +646,7 @@ class AuthServices {
     await _firestore.collection(_users).doc(uid).update(data);
   }
 
+  // Admin/official lists of every user document.
   Stream<List<UserProfile>> watchUsers() {
     return _firestore.collection(_users).snapshots().map((snapshot) {
       return snapshot.docs.map(UserProfile.fromFirestore).toList();
@@ -566,6 +658,7 @@ class AuthServices {
     return snapshot.docs.map(UserProfile.fromFirestore).toList();
   }
 
+  // Live list of official applications for the admin dashboard.
   Stream<List<AccessRequest>> watchOfficialApplications() {
     return _firestore.collection(_officialApplications).snapshots().map((
       snapshot,
@@ -574,6 +667,7 @@ class AuthServices {
     });
   }
 
+  // Live list of worker applications for the official dashboard.
   Stream<List<WorkerApplication>> watchWorkerApplications() {
     return _firestore.collection(_workerApplications).snapshots().map((
       snapshot,
@@ -591,6 +685,7 @@ class AuthServices {
     return legacy.docs.map(AccessRequest.fromFirestore).toList();
   }
 
+  // Admin allows this person to sign in as an official.
   Future<void> approveOfficialRequest(AccessRequest request) async {
     final admin = _auth.currentUser;
     if (admin == null) {
@@ -638,6 +733,7 @@ class AuthServices {
     );
   }
 
+  // Admin rejects the official application.
   Future<void> rejectOfficialRequest(AccessRequest request) async {
     final admin = _auth.currentUser;
     await _firestore.collection(_users).doc(request.uid).set({
@@ -663,6 +759,7 @@ class AuthServices {
     );
   }
 
+  // Official approves a worker so they can open the worker dashboard.
   Future<void> approveWorkerApplication(WorkerApplication application) async {
     final official = _auth.currentUser;
     if (official == null) {
@@ -675,6 +772,10 @@ class AuthServices {
       'roles': [UserRole.worker],
       'reviewedBy': official.uid,
       'reviewedAt': FieldValue.serverTimestamp(),
+      if (application.specializations.isNotEmpty)
+        'specializations': application.specializations,
+      if (application.specialtyLabel.isNotEmpty)
+        'specialization': application.specialtyLabel,
     }, SetOptions(merge: true));
     await _updateApplicationStatus(
       collection: _workerApplications,
@@ -698,6 +799,7 @@ class AuthServices {
     );
   }
 
+  // Official rejects a worker application.
   Future<void> rejectWorkerApplication(WorkerApplication application) async {
     final official = _auth.currentUser;
     final profile = await fetchProfile(application.uid);
@@ -727,6 +829,7 @@ class AuthServices {
     );
   }
 
+  // Block a worker account and record the reason.
   Future<void> blacklistWorker({
     required WorkerApplication application,
     required String reason,
@@ -780,6 +883,7 @@ class AuthServices {
     );
   }
 
+  // Disable the worker profile (does not delete Firebase Auth by itself).
   Future<void> deleteWorkerProfile({
     required WorkerApplication application,
     required String reason,
@@ -821,6 +925,7 @@ class AuthServices {
     );
   }
 
+  // Change a user's role in Firestore. Admin cannot be assigned from the app.
   Future<void> setUserRole({
     required String uid,
     required String role,
@@ -850,6 +955,7 @@ class AuthServices {
     });
   }
 
+  // True if this uid still has a pending official application.
   Future<bool> hasPendingOfficialRequest(String uid) async {
     final official = await _firestore
         .collection(_officialApplications)
@@ -862,10 +968,12 @@ class AuthServices {
     return doc.exists && (doc.data()?['status'] == 'pending');
   }
 
+  // Sign out of Firebase Auth. AuthGate then shows the landing page.
   Future<void> signOut() async {
     await _auth.signOut();
   }
 
+  // Send a password-setup email so the new official/worker can sign in.
   Future<void> sendStaffLoginEmail(String email) async {
     await _auth.sendPasswordResetEmail(email: email.trim());
   }
@@ -921,6 +1029,7 @@ class AuthServices {
     );
   }
 
+  // After Auth login, check the users document: role, rejected, blacklisted.
   Future<void> _assertLoginProfile({
     required String? uid,
     String? expectedRole,
@@ -974,6 +1083,7 @@ class AuthServices {
     }
   }
 
+  // Create or overwrite the users/{uid} profile document.
   Future<void> _writeUserProfile({
     required String uid,
     required String name,
@@ -1008,6 +1118,7 @@ class AuthServices {
     }
   }
 
+  // Re-enter the current password, then set a new one in Firebase Auth.
   Future<void> changePassword({
     required String currentPassword,
     required String newPassword,
@@ -1028,6 +1139,7 @@ class AuthServices {
     }, SetOptions(merge: true));
   }
 
+  // Send another verification email to the signed-in public user.
   Future<void> sendVerificationEmail() async {
     final user = _auth.currentUser;
     if (user == null) return;
@@ -1065,6 +1177,7 @@ class AuthServices {
   String _phoneDocId(String phone) =>
       phone.replaceAll('+', '').replaceAll(RegExp(r'\s'), '');
 
+  // If registration fails after Auth create, delete that Auth user.
   Future<void> _rollbackNewUser(UserCredential? credential) async {
     final user = credential?.user;
     if (user == null) return;
@@ -1075,6 +1188,7 @@ class AuthServices {
     }
   }
 
+  // True only when no admin has been created yet (appSettings/bootstrap missing).
   Future<bool> isAdminBootstrapOpen() async {
     final doc = await _firestore
         .collection('appSettings')
@@ -1083,6 +1197,7 @@ class AuthServices {
     return !doc.exists;
   }
 
+  // First-time setup: create the only admin account from the app.
   Future<void> bootstrapFirstAdmin({
     required String fullName,
     required String email,
